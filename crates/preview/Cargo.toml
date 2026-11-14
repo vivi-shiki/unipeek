@@ -1,0 +1,23 @@
+[package]
+name = "preview"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# Build against gpui-fast (Longbridge fork) instead of upstream GPUI.
+fast = ["gpui-kit/gpui-fast"]
+
+[dependencies]
+lab-render.workspace = true
+anyhow.workspace = true
+gpui-kit = "0.9"
+image = { version = "0.25", default-features = false }
+smallvec = "1"
+raw-window-handle = "0.6"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_DirectComposition",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }

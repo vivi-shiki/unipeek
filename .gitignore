@@ -1,0 +1,5 @@
+/target
+/out
+# never commit paid assets
+/assets
+/target-fast
