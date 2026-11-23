@@ -11,6 +11,7 @@ Model files are never committed. Pass the paths on the command line.
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md): what the render library is for, its inputs and outputs (Chinese).
 - [docs/PRIOR_ART.md](docs/PRIOR_ART.md): survey of related open-source projects (Chinese).
 - [docs/INTEGRATION.md](docs/INTEGRATION.md): how this library plugs into Snowcase (Chinese).
+- [CLAUDE.md](CLAUDE.md), [Project.md](Project.md) and [.github/](.github/README.md): instructions for AI coding agents, adapted from GacUI.
 
 ## Layout
 

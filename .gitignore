@@ -3,3 +3,6 @@
 # never commit paid assets
 /assets
 /target-fast
+# logs written by .github/Scripts
+/.github/Scripts/*.log
+/.github/Scripts/*.unfinished
