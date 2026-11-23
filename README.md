@@ -1,9 +1,16 @@
-# snowcase-preview-lab
+# unipeek
 
-Minimal test of how to show a wgpu-rendered Unity model inside a GPUI window on Windows.
-Throwaway code for the Snowcase 3D preview research; not part of Snowcase.
+A preview library for Unity asset packages: read a `.unitypackage`, zip or folder, work out which prefab and materials to show, and render a toon-style thumbnail or an interactive viewport. [Snowcase](https://github.com/Map1en/Snowcase) is the first user; any other tool can call it too.
+
+> **Status: research prototype.** The code here is still the preview lab: a minimal test of how to show a wgpu-rendered model inside a GPUI window on Windows. Nothing is published yet.
 
 Model files are never committed. Pass the paths on the command line.
+
+## Docs
+
+- [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md): what the render library is for, its inputs and outputs (Chinese).
+- [docs/PRIOR_ART.md](docs/PRIOR_ART.md): survey of related open-source projects (Chinese).
+- [docs/INTEGRATION.md](docs/INTEGRATION.md): how this library plugs into Snowcase (Chinese).
 
 ## Layout
 
@@ -19,11 +26,11 @@ Model files are never committed. Pass the paths on the command line.
 ## Run
 
 ```
-set K=<model folder>
-cargo run -p preview -- overlay  %K%\model.fbx %K%\textures 1100x800
-cargo run -p preview -- readback %K%\model.fbx %K%\textures 1100x800
-cargo run -p preview --features fast --target-dir target-fast -- fast %K%\model.fbx %K%\textures 1100x800
-cargo run --release -p lab-render --example thumb -- %K%\model.fbx %K%\textures out\front.png 1024 1024
+set M=<model folder>
+cargo run -p preview -- overlay  %M%\model.fbx %M%\textures 1100x800
+cargo run -p preview -- readback %M%\model.fbx %M%\textures 1100x800
+cargo run -p preview --features fast --target-dir target-fast -- fast %M%\model.fbx %M%\textures 1100x800
+cargo run --release -p lab-render --example thumb -- %M%\model.fbx %M%\textures out\front.png 1024 1024
 ```
 
 Left drag rotates, middle drag pans, wheel zooms. `Popup test` cycles a GPUI panel over the viewport.
@@ -31,7 +38,7 @@ Env: `LAB_SPIN=1` rotates continuously, `LAB_SECS=n` quits after n seconds, `LAB
 
 ## Results (2026-11-14, i7-8750H, RTX 2060, 75 Hz display, dev build)
 
-Test model: 69,640 triangles, parsed in about 90 ms. Loading eight 4K PNGs and building mips takes 6 to 9 s on the UI thread and needs to move off it.
+Test model (a BOOTH avatar FBX, not included): 69,640 triangles, parsed in about 90 ms. Loading eight 4K PNGs and building mips takes 6 to 9 s on the UI thread and needs to move off it.
 
 | mode | 1100x760 | 2400x940 | popup over the 3D area |
 |---|---|---|---|
@@ -42,3 +49,8 @@ Test model: 69,640 triangles, parsed in about 90 ms. Loading eight 4K PNGs and b
 The time is what our code spends per frame: render and present, or render, read back and build the `RenderImage`. GPUI's own upload of the read-back image into its atlas is not included. All modes held the display's 76 fps.
 
 Not tested: dragging with the mouse, live window resizing, DPI changes, device loss, the Intel iGPU.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option.
+
