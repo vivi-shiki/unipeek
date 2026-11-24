@@ -21,3 +21,8 @@ pub use thumb::{Background, ImageFormat, RENDERER_VERSION, ThumbOptions, View, e
 pub use unipeek_unity as unity;
 pub use unipeek_unity::{Input, Report, Source, Status};
 pub use wgpu;
+
+/// The integration guide's Rust examples are compiled as doctests so they cannot drift from the API.
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/USAGE.md")]
+mod usage_guide {}
