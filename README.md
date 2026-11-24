@@ -2,7 +2,7 @@
 
 A preview library for Unity asset packages: read a `.unitypackage`, zip or folder, work out which prefab and materials to show, and render a toon-style thumbnail or an interactive viewport. [Snowcase](https://github.com/Map1en/Snowcase) is the first user; any other tool can call it too.
 
-> **Status: research prototype.** The code here is still the preview lab: a minimal test of how to show a wgpu-rendered model inside a GPUI window on Windows. Nothing is published yet.
+> **Status: 0.1.0-alpha.1, not published yet.** Thumbnails, reports, the `serve` protocol and the command line work (roadmap M1 to M3). The interactive viewport (M4) and cross-package dependencies (M5) are next. See [CHANGELOG.md](CHANGELOG.md).
 
 Model files are never committed. Pass the paths on the command line.
 
@@ -11,12 +11,15 @@ Model files are never committed. Pass the paths on the command line.
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md): what the render library is for, its inputs and outputs (Chinese).
 - [docs/PRIOR_ART.md](docs/PRIOR_ART.md): survey of related open-source projects (Chinese).
 - [docs/INTEGRATION.md](docs/INTEGRATION.md): how this library plugs into Snowcase (Chinese).
+- [docs/USAGE.md](docs/USAGE.md): how a host calls the library, the `serve` protocol and the command line (Chinese).
+- [docs/ROADMAP.md](docs/ROADMAP.md): milestones M0 to M6 (Chinese).
 - [CLAUDE.md](CLAUDE.md), [Project.md](Project.md) and [.github/](.github/README.md): instructions for AI coding agents, adapted from GacUI.
 
 ## Layout
 
-- `crates/render`: UI-agnostic. `ufbx` loads the FBX, textures are matched to materials by name, a small wgpu renderer draws it (toon-ish shading, MSAA 4x, orbit camera).
-- `crates/preview`: one GPUI app with three ways to put the frames on screen.
+- `crates/unity` (`unipeek-unity`): GPU-free. Streams a `.unitypackage`, reads Unity YAML, `.meta` and `.mat`, chooses the prefab and binds materials and textures, and writes the report.
+- `crates/render` (`unipeek`): loads FBX with `ufbx`, decodes textures off the caller's thread, renders toon-style thumbnails on a headless wgpu device, runs `serve`, and builds the `unipeek` command line.
+- `crates/preview`: research GPUI app with three ways to put frames on screen. Never published.
 
 | mode | GPUI backend | how |
 |---|---|---|
@@ -26,16 +29,24 @@ Model files are never committed. Pass the paths on the command line.
 
 ## Run
 
+`<input>` is a `.unitypackage`, `.zip`, folder or `.fbx`, optionally followed by `#<path inside>`.
+
 ```
-set M=<model folder>
-cargo run -p preview -- overlay  %M%\model.fbx %M%\textures 1100x800
-cargo run -p preview -- readback %M%\model.fbx %M%\textures 1100x800
-cargo run -p preview --features fast --target-dir target-fast -- fast %M%\model.fbx %M%\textures 1100x800
-cargo run --release -p unipeek --example thumb -- %M%\model.fbx %M%\textures out\front.png 1024 1024
+cargo run --release -p unipeek -- info  <input> [--json]
+cargo run --release -p unipeek -- thumb <input> -o out/thumb.webp --size 512 --view 3q
+cargo run --release -p unipeek -- serve
+cargo run -p preview -- readback <input> 1100x800
+cargo run -p preview --features fast --target-dir target-fast -- fast <input> 1100x800
 ```
 
-Left drag rotates, middle drag pans, wheel zooms. `Popup test` cycles a GPUI panel over the viewport.
+Exit codes: 0 ok, 1 degraded, 2 unsupported, 3 error, 64 usage.
+In the preview, left drag rotates, middle drag pans, wheel zooms. `Popup test` cycles a GPUI panel over the viewport.
 Env: `LAB_SPIN=1` rotates continuously, `LAB_SECS=n` quits after n seconds, `LAB_POPUP=0|1|2` sets the popup state at start.
+
+## Tests
+
+Tests that run anywhere build tiny packages, zips and ASCII FBX files in the test itself; GPU tests print `skipped:` when there is no adapter.
+Real samples are paid assets and stay outside the repo: set `UNIPEEK_SAMPLES` to their folder, which also holds the manifest `unipeek-samples.json`, to run `crates/render/tests/local_samples.rs`. `UNIPEEK_BIG=1` adds a 3 GB streaming test.
 
 ## Results (2026-11-14, i7-8750H, RTX 2060, 75 Hz display, dev build)
 

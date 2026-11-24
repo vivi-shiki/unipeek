@@ -17,65 +17,67 @@ The following choices are preferred:
 
 [Learning of Coding Preference](./Learning.md)
 
+## unipeek-unity
+
+Folder: `REPO-ROOT/crates/unity`
+
+GPU-free parsing. Opens any input as a `PackageIndex`, decides what to show (`Plan`), binds every FBX material slot, and writes the `Report`. It never depends on `wgpu`.
+
+### Choosing APIs
+
+#### Opening Inputs
+
+- Use `Input::from_location` to split `a.zip#b.unitypackage#Assets/x.prefab` into a source and inner paths; `Source` is a path, bytes or a one-shot reader.
+- Use `Package::open` to index a unitypackage, zip, folder or single FBX; loose files get GUIDs from their paths. Use `Package::read_assets` for FBX and texture bytes.
+- Use `PackageIndex::read` / `read_assets` directly for a `.unitypackage` stream.
+
+#### Unity Assets
+
+- Use `yaml::parse_documents` / `yaml::parse` for Unity YAML, `Meta::parse`, `Material::parse`, `Prefab::parse` for the typed views.
+- Use `shader::identify` for a shader reference (lilToon GUID table, Unity built-ins, names found in the package) and `Look::of` for the approximate look of a material.
+
+#### Planning and Reporting
+
+- Use `Plan::new` to choose the main prefab and its models, and `Plan::bind_slot` (renderer slots first) or `Plan::bind` (names) for one FBX material slot.
+- Use `Report::new`, `Report::add_binding` and `Report::degrade` to collect what was found; `Status::exit_code` maps it to the CLI.
+- Use the `testing` feature (`PackageBuilder`, `zip`, `fbx_ascii`, `material_yaml`, `model_meta`, `prefab_instancing`, `prefab_with_renderer`) to build synthetic inputs in tests.
+
 ## unipeek
 
 Folder: `REPO-ROOT/crates/render`
 
-The UI-agnostic part of the lab. It loads an FBX with ufbx into a flat triangle list grouped by material, matches textures to materials by file name, and draws the model with a small wgpu forward renderer (MSAA 4x, toon-ish shading, orbit camera).
-It is the seed of the future `unipeek` crate. The parsing half will move to `unipeek-unity`.
-It does not read `.unitypackage`, `.meta`, `.mat` or prefabs yet.
+Rendering. `Scene::load` prepares everything on the CPU (ufbx, bindings, textures decoded on worker threads with mips); the renderer draws a `Scene`; thumbnails, `serve` and the `unipeek` binary sit on top.
 
 ### Choosing APIs
 
 #### GPU Device
 
-Create the wgpu instance, adapter, device and queue shared by every front end.
+- Use `Gpu::headless` for offscreen work (DX12, then Vulkan or Metal, then any backend); `Gpu::new` with `Gpu::instance` when a surface is involved (DX12 for DirectComposition).
+- Use `Gpu::read_texture` to copy a single-sample RGBA or BGRA target back to the CPU.
 
-- Use `Gpu::instance` to create a `wgpu::Instance` limited to some backends (DX12 is required for DirectComposition surfaces).
-- Use `Gpu::new` to pick a high-performance adapter, optionally compatible with a surface, and create the device and queue.
+#### Scenes and Models
 
-#### Model Loading
+- Use `Scene::load` with `LoadOptions` (`max_texture`) to get geometry, `SceneMaterial`s with `Look` and mips, bounds and the report. It never touches the GPU.
+- Use `Model::from_fbx_bytes` / `Model::load_fbx` for raw FBX geometry; `Part::slot` is the submesh index a Unity renderer uses.
 
-Turn an FBX file into a vertex soup ready for one vertex buffer.
+#### Rendering and Thumbnails
 
-- Use `Model::load_fbx` to load an FBX converted to right-handed, Y-up, meters, with skinning applied and missing normals generated.
-- Use `Model::parts` (`Part`) to know which range of vertices uses which material name and comes from which mesh node.
-- Use `Model::min` / `Model::max` for the bounding box, and `Model::triangles` for the triangle count.
-
-#### Textures
-
-Find and decode the texture for a material.
-
-- Use `texture::guess_texture` to find the shortest PNG file name ending with the material name, case-insensitive. It is the last-level fallback of material binding.
-- Use `texture::load_mips` to decode a PNG, clamp it to `texture::MAX_SIZE` and build a mip chain on the CPU.
-
-#### Rendering
-
-Draw a model into any color target.
-
-- Use `Renderer::new` to build pipelines, upload vertices and one texture per distinct material for a given target format.
-- Use `Renderer::render` to record one frame into a single-sample `wgpu::TextureView`; MSAA and depth targets are created and resized internally.
-- Use `Renderer::clear` to set the background color (alpha 0 for transparent thumbnails).
+- Use `Renderer::new` with a `Scene` and a target format, `Renderer::render` per frame, `Renderer::clear` for the background.
+- Use `render_thumbnail` for an RGBA image, `write_thumbnail` to load, render and write a `.png` or `.webp` file, `encode` for bytes. Bump `RENDERER_VERSION` whenever pixels change.
+- Use `serve::serve` for the JSON line protocol and the `unipeek` binary (feature `cli`) for the command line.
 
 #### Camera
 
-Orbit around the model.
-
-- Use `Orbit::fit` to frame a bounding box.
-- Use `Orbit::rotate`, `Orbit::pan`, `Orbit::zoom` to feed mouse deltas and wheel steps.
-- Use `Orbit::view_proj` and `Orbit::eye` when writing shader constants.
+- Use `Orbit::fit` to frame a bounding box; `Orbit::rotate`, `Orbit::pan`, `Orbit::zoom` for mouse input; `Orbit::view_proj` and `Orbit::eye` for shader constants.
 
 ### Design Explanation
 
 #### Render Pipeline
 
-How a frame is produced from a `Model`.
-
-- Two pipelines share one shader: opaque (depth write, alpha-to-coverage) and blended (no depth write, alpha blending). Opaque parts are drawn first.
-- A part is blended only when its material name contains `alpha`. This is a placeholder for render queue and shader-variant rules.
-- The key light follows the camera so the model is never back-lit; shading is half-Lambert through a soft step with a tinted shadow and a weak rim.
-- A material without a matching texture gets a 4×4 light grey texture and a log line.
-- Texture decoding happens inside `Renderer::new`, on the caller's thread. This is the 6–9 s stall noted in the README.
+- Passes: solid (opaque and cutout, depth write), inverted-hull outline (front faces culled, extruded along normals by the lilToon width in meters), then alpha-blended. One pipeline per pass and cull mode.
+- Per-material uniform: color, shadow color, cutoff and mode; cutout discards below `_Cutoff`, opaque forces alpha 1.
+- Thumbnails clear to transparent black and un-premultiply the resolved edges after readback.
+- The key light follows the camera; shading is half-Lambert through a soft step tinted by the material's shadow color, plus a weak rim.
 
 [Design Explanation](./KB_LabRender_Design_RenderPipeline.md)
 
