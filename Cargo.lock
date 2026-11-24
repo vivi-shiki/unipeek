@@ -7055,6 +7055,7 @@ dependencies = [
  "glam",
  "image",
  "pollster",
+ "thiserror 2.0.21",
  "ufbx",
  "unipeek-unity",
  "wgpu",

@@ -159,5 +159,56 @@ pub fn zip(entries: &[(&[u8], &[u8], bool)]) -> Vec<u8> {
     out
 }
 
+/// An ASCII FBX 7.4 with one mesh: one unit quad per material, side by side along +X, facing +Z.
+/// Units are meters and Y is up.
+pub fn fbx_ascii(materials: &[&str]) -> String {
+    let n = materials.len().max(1);
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    let mut uv_index = Vec::new();
+    let mut mats = Vec::new();
+    for q in 0..n {
+        let x = q as f32 * 1.5;
+        for (vx, vy) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)] {
+            vertices.push(format!("{},{},0", x + vx, vy));
+        }
+        let b = (q * 4) as i64;
+        indices.push(format!("{},{},{},{}", b, b + 1, b + 2, -(b + 3) - 1));
+        uv_index.push("0,1,2,3".to_string());
+        mats.push(q.to_string());
+    }
+    let mut s = String::from(
+        "; FBX 7.4.0 project file\nFBXHeaderExtension:  {\n\tFBXHeaderVersion: 1003\n\tFBXVersion: 7400\n}\nGlobalSettings:  {\n\tVersion: 1000\n\tProperties70:  {\n\t\tP: \"UpAxis\", \"int\", \"Integer\", \"\",1\n\t\tP: \"UpAxisSign\", \"int\", \"Integer\", \"\",1\n\t\tP: \"FrontAxis\", \"int\", \"Integer\", \"\",2\n\t\tP: \"FrontAxisSign\", \"int\", \"Integer\", \"\",1\n\t\tP: \"CoordAxis\", \"int\", \"Integer\", \"\",0\n\t\tP: \"CoordAxisSign\", \"int\", \"Integer\", \"\",1\n\t\tP: \"UnitScaleFactor\", \"double\", \"Number\", \"\",100\n\t}\n}\nObjects:  {\n",
+    );
+    s += &format!(
+        "\tGeometry: 1000, \"Geometry::Quads\", \"Mesh\" {{\n\t\tVertices: *{} {{\n\t\t\ta: {}\n\t\t}}\n\t\tPolygonVertexIndex: *{} {{\n\t\t\ta: {}\n\t\t}}\n",
+        n * 12,
+        vertices.join(","),
+        n * 4,
+        indices.join(",")
+    );
+    s += &format!(
+        "\t\tLayerElementUV: 0 {{\n\t\t\tVersion: 101\n\t\t\tName: \"UVMap\"\n\t\t\tMappingInformationType: \"ByPolygonVertex\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n\t\t\tUV: *8 {{\n\t\t\t\ta: 0,0,1,0,1,1,0,1\n\t\t\t}}\n\t\t\tUVIndex: *{} {{\n\t\t\t\ta: {}\n\t\t\t}}\n\t\t}}\n",
+        n * 4,
+        uv_index.join(",")
+    );
+    s += &format!(
+        "\t\tLayerElementMaterial: 0 {{\n\t\t\tVersion: 101\n\t\t\tName: \"\"\n\t\t\tMappingInformationType: \"ByPolygon\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n\t\t\tMaterials: *{} {{\n\t\t\t\ta: {}\n\t\t\t}}\n\t\t}}\n",
+        n,
+        mats.join(",")
+    );
+    s += "\t\tLayer: 0 {\n\t\t\tVersion: 100\n\t\t\tLayerElement:  {\n\t\t\t\tType: \"LayerElementMaterial\"\n\t\t\t\tTypedIndex: 0\n\t\t\t}\n\t\t\tLayerElement:  {\n\t\t\t\tType: \"LayerElementUV\"\n\t\t\t\tTypedIndex: 0\n\t\t\t}\n\t\t}\n\t}\n";
+    s += "\tModel: 2000, \"Model::Quads\", \"Mesh\" {\n\t\tVersion: 232\n\t}\n";
+    for (i, m) in materials.iter().enumerate() {
+        s += &format!("\tMaterial: {}, \"Material::{m}\", \"\" {{\n\t\tVersion: 102\n\t\tShadingModel: \"phong\"\n\t}}\n", 3000 + i);
+    }
+    s += "}\nConnections:  {\n\tC: \"OO\",1000,2000\n\tC: \"OO\",2000,0\n";
+    for i in 0..materials.len() {
+        s += &format!("\tC: \"OO\",{},2000\n", 3000 + i);
+    }
+    s += "}\n";
+    s
+}
+
 pub const FBX_BINARY_MAGIC: &[u8] = b"Kaydara FBX Binary  \x00\x1a\x00";
 pub const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";

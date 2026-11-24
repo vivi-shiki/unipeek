@@ -16,3 +16,7 @@ pollster.workspace = true
 anyhow.workspace = true
 image.workspace = true
 ufbx.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+unipeek-unity = { workspace = true, features = ["testing"] }

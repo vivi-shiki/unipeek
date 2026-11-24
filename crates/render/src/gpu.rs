@@ -22,6 +22,11 @@ impl Gpu {
         Ok(Gpu { instance, adapter, device, queue })
     }
 
+    /// A device for offscreen rendering (thumbnails, readback viewports), without any window.
+    pub fn headless() -> crate::Result<Gpu> {
+        todo!()
+    }
+
     pub fn instance(backends: wgpu::Backends) -> wgpu::Instance {
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
         desc.backends = backends;
