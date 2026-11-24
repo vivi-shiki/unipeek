@@ -2,7 +2,7 @@
 
 A preview library for Unity asset packages: read a `.unitypackage`, zip or folder, work out which prefab and materials to show, and render a toon-style thumbnail or an interactive viewport. [Snowcase](https://github.com/Map1en/Snowcase) is the first user; any other tool can call it too.
 
-> **Status: 0.1.0-alpha.1, not published yet.** Thumbnails, reports, the `serve` protocol and the command line work (roadmap M1 to M3). The interactive viewport (M4) and cross-package dependencies (M5) are next. See [CHANGELOG.md](CHANGELOG.md).
+> **Status: 0.1.0-alpha.2 on [crates.io](https://crates.io/crates/unipeek).** Thumbnails, reports, the `serve` protocol and the command line work (roadmap M1 to M3). The interactive viewport (M4) and cross-package dependencies (M5) are next. See [CHANGELOG.md](CHANGELOG.md).
 
 Model files are never committed. Pass the paths on the command line.
 

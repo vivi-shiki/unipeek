@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["unity", "unitypackage", "thumbnail", "toon", "vrchat"]
+categories = ["game-development", "rendering", "graphics"]
 rust-version.workspace = true
 
 [dependencies]

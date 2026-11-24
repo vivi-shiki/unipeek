@@ -4,7 +4,10 @@
 the minor version may break the API; `0.1.x` releases only fix bugs and add things.
 `RENDERER_VERSION` changes whenever rendered pixels change, independently of the crate version.
 
-## 0.1.0-alpha.1 (unreleased)
+## 0.1.0-alpha.2 (2026-11-24)
+
+First release on crates.io. `0.1.0-alpha.1` was only a git tag and was never published; this release
+adds everything below that landed after it, plus a README, keywords and license files for each crate.
 
 First version a host can depend on (roadmap M1 to M3). `RENDERER_VERSION` is 1.
 

@@ -2,7 +2,7 @@
 
 结论：Snowcase 在 `Cargo.toml` 里按名字依赖 `unipeek`，不用复制代码。`formats` 依赖只管解析的 `unipeek-unity`，`app` 依赖带渲染的 `unipeek`。缩略图在 `snowcase.exe --thumb-worker` 子进程里调 `unipeek::serve`，详情预览用 `Viewport::offscreen` 读回给 `RenderImage`。
 
-状态：2026-11-24 更新到 `0.1.0-alpha.1`。缩略图、`serve`、`info` 和命令行已经实现并有测试；「详情预览」（M4）和「跨包依赖」（M5）两节还是计划稿。写给 Snowcase 的接入方（Map1en），决定的来由见 [INTEGRATION「接入决定」](INTEGRATION.md#接入决定m02026-11-24)。
+状态：2026-11-24 更新到 `0.1.0-alpha.2`。缩略图、`serve`、`info` 和命令行已经实现并有测试；「详情预览」（M4）和「跨包依赖」（M5）两节还是计划稿。写给 Snowcase 的接入方（Map1en），决定的来由见 [INTEGRATION「接入决定」](INTEGRATION.md#接入决定m02026-11-24)。
 
 仓库：<https://github.com/vivi-shiki/unipeek>，MIT OR Apache-2.0，可以进 GPL-3.0 的 Snowcase；反过来 Snowcase 的代码不能进 unipeek。
 
@@ -13,20 +13,20 @@
 | `unipeek-unity` | 流式读 unitypackage、Unity YAML、prefab → `.mat` → 贴图、`Report`；不依赖 GPU，CI 能测 | `formats`（以后换掉自己的 `list_unitypackage` 时） |
 | `unipeek` | wgpu + ufbx 渲染：缩略图、`serve`、命令行（以后加 `Viewport`）；以 `unipeek::unity` 重新导出 `unipeek-unity`，不用两个都写 | `app` |
 
-发到 crates.io 以后：
+已经发到 crates.io（`0.1.0-alpha.2` 起）：
 
 ```toml
 # app/Cargo.toml
-unipeek = { version = "0.1.0-alpha.1", default-features = false }   # 不要 unipeek 命令行时关掉 cli
+unipeek = { version = "0.1.0-alpha.2", default-features = false }   # 不要 unipeek 命令行时关掉 cli
 
 # formats/Cargo.toml（以后）
-unipeek-unity = "0.1.0-alpha.1"
+unipeek-unity = "0.1.0-alpha.2"
 ```
 
-发布前的过渡期用 git 依赖，锁 tag 或 rev，不要跟分支：
+要跟没发布的提交时用 git 依赖，锁 tag 或 rev，不要跟分支：
 
 ```toml
-unipeek = { git = "https://github.com/vivi-shiki/unipeek", tag = "v0.1.0-alpha.1" }
+unipeek = { git = "https://github.com/vivi-shiki/unipeek", tag = "v0.1.0-alpha.2" }
 ```
 
 - Snowcase CI 用 `--locked`，升级时连 `Cargo.lock` 一起提交。
@@ -143,7 +143,7 @@ unipeek 按包分组，每个包只读一遍。找不到时照常出图，记「
 - 不追求和 Unity 一样的画面；认不出的材质显示白模加主贴图，不报错。
 - 首个发布没有转台帧，也没有零拷贝视口。
 
-## 已知限制（0.1.0-alpha.1）
+## 已知限制（0.1.0-alpha.2）
 
 - prefab 对 FBX 实例上渲染器材质的覆盖（`m_Materials` 修改）还对不上是哪个渲染器，报告里是 `material_overrides_ignored`，那些槽位按 FBX 的默认材质画。
 - 还不读 PSD 贴图（报 `texture_unreadable`）、7z、Unity 工程、glTF / VRM。
