@@ -22,3 +22,12 @@ serde_json.workspace = true
 
 [dev-dependencies]
 unipeek-unity = { workspace = true, features = ["testing"] }
+
+[features]
+default = ["cli"]
+# The `unipeek` binary. Hosts that only link the library can turn it off.
+cli = []
+
+[[bin]]
+name = "unipeek"
+required-features = ["cli"]

@@ -4,6 +4,7 @@ pub mod gpu;
 pub mod model;
 pub mod renderer;
 pub mod scene;
+pub mod serve;
 pub mod texture;
 pub mod thumb;
 
