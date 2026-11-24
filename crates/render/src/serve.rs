@@ -84,6 +84,8 @@ fn handle(req: Request, gpu: &mut Option<Result<Gpu, String>>) -> Value {
                 Ok(report) => {
                     let mut reply = summary(id, &report);
                     reply["out"] = json!(out);
+                    reply["backend"] = json!(gpu.describe());
+                    reply["fallback"] = json!(gpu.fallback);
                     reply
                 }
                 Err(e) => failure(id, &e),

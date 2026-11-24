@@ -95,6 +95,9 @@ fn run(args: &[String]) -> Result<i32, Failure> {
                 return Err(Failure::Usage(format!("{out} must end with .png or .webp")));
             }
             let gpu = Gpu::headless()?;
+            for failed in &gpu.fallback {
+                eprintln!("fallback: {failed}");
+            }
             let report = thumb::write_thumbnail(&gpu, input, std::path::Path::new(&out), &opts)?;
             for d in &report.degrades {
                 eprintln!("degraded: {}", serde_json::to_string(d).unwrap_or_default());

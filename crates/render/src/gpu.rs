@@ -25,24 +25,28 @@ impl Gpu {
     /// A device for offscreen rendering (thumbnails, readback viewports), without any window.
     /// Tries DX12 first on Windows, then Vulkan and Metal, then anything wgpu offers.
     pub fn headless() -> crate::Result<Gpu> {
+        Gpu::headless_from(&[wgpu::Backends::DX12, wgpu::Backends::VULKAN | wgpu::Backends::METAL, wgpu::Backends::all()])
+    }
+
+    /// Like `headless`, trying the given backend sets in order.
+    pub fn headless_from(order: &[wgpu::Backends]) -> crate::Result<Gpu> {
         let mut errors = Vec::new();
-        for backends in [wgpu::Backends::DX12, wgpu::Backends::VULKAN | wgpu::Backends::METAL, wgpu::Backends::all()] {
+        for &backends in order {
             match Gpu::new(Gpu::instance(backends), None) {
-                Ok(gpu) => return Ok(gpu),
+                Ok(mut gpu) => {
+                    gpu.fallback = errors;
+                    return Ok(gpu);
+                }
                 Err(e) => errors.push(format!("{backends:?}: {e}")),
             }
         }
         Err(crate::Error::NoGpu(errors.join("; ")))
     }
 
-    /// Like `headless`, trying the given backend sets in order.
-    pub fn headless_from(_order: &[wgpu::Backends]) -> crate::Result<Gpu> {
-        todo!()
-    }
-
     /// The adapter's backend and name, e.g. `Dx12: NVIDIA GeForce RTX 2060`.
     pub fn describe(&self) -> String {
-        todo!()
+        let info = self.adapter.get_info();
+        format!("{:?}: {}", info.backend, info.name)
     }
 
     pub fn instance(backends: wgpu::Backends) -> wgpu::Instance {
