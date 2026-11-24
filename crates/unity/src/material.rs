@@ -1,7 +1,7 @@
 //! `.mat` files and the approximate look unipeek derives from them.
 use crate::{
-    shader::{RenderMode, ShaderInfo},
-    yaml::ObjRef,
+    shader::{RenderMode, ShaderFamily, ShaderInfo, Variant},
+    yaml::{self, Node, ObjRef},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -28,25 +28,58 @@ pub const MAIN_TEXTURE_NAMES: &[&str] = &["_MainTex", "_BaseMap", "_BaseColorMap
 
 impl Material {
     /// `None` when the text has no `Material` document (binary serialization, other asset).
-    pub fn parse(_text: &str) -> Option<Material> {
-        todo!()
+    pub fn parse(text: &str) -> Option<Material> {
+        let doc = yaml::parse_documents(text).into_iter().find(|d| d.class_id == 21)?;
+        let body = &doc.body;
+        let props = body.get("m_SavedProperties");
+        let pairs = |key: &str| props.and_then(|p| p.get(key)).map(Node::items).unwrap_or_default().iter().filter_map(|n| n.entries().first());
+        let vec2 = |n: Option<&Node>, d: f32| [n.and_then(|v| v.get("x")).and_then(Node::as_f32).unwrap_or(d), n.and_then(|v| v.get("y")).and_then(Node::as_f32).unwrap_or(d)];
+        let textures = pairs("m_TexEnvs")
+            .filter_map(|(name, v)| {
+                Some(TexEnv {
+                    name: name.clone(),
+                    texture: v.get("m_Texture")?.reference()?,
+                    scale: vec2(v.get("m_Scale"), 1.0),
+                    offset: vec2(v.get("m_Offset"), 0.0),
+                })
+            })
+            .collect();
+        let floats = pairs("m_Floats").chain(pairs("m_Ints")).filter_map(|(k, v)| Some((k.clone(), v.as_f32()?))).collect();
+        let colors = pairs("m_Colors")
+            .filter_map(|(k, v)| {
+                let c = |key| v.get(key).and_then(Node::as_f32);
+                Some((k.clone(), [c("r")?, c("g")?, c("b")?, c("a").unwrap_or(1.0)]))
+            })
+            .collect();
+        Some(Material {
+            name: body.get("m_Name").and_then(Node::as_str).unwrap_or_default().to_string(),
+            shader: body.get("m_Shader").and_then(Node::reference),
+            render_queue: body.get("m_CustomRenderQueue").and_then(Node::as_i64).unwrap_or(-1) as i32,
+            textures,
+            floats,
+            colors,
+        })
     }
 
-    pub fn texture(&self, _name: &str) -> Option<&TexEnv> {
-        todo!()
+    pub fn texture(&self, name: &str) -> Option<&TexEnv> {
+        self.textures.iter().find(|t| t.name == name)
     }
 
-    pub fn float(&self, _name: &str) -> Option<f32> {
-        todo!()
+    pub fn float(&self, name: &str) -> Option<f32> {
+        self.floats.iter().find(|(k, _)| k == name).map(|(_, v)| *v)
     }
 
-    pub fn color(&self, _name: &str) -> Option<[f32; 4]> {
-        todo!()
+    pub fn color(&self, name: &str) -> Option<[f32; 4]> {
+        self.colors.iter().find(|(k, _)| k == name).map(|(_, v)| *v)
     }
 
     /// The first main-texture property that points at a texture.
     pub fn main_texture(&self) -> Option<&TexEnv> {
-        todo!()
+        MAIN_TEXTURE_NAMES.iter().filter_map(|n| self.texture(n)).find(|t| !t.texture.is_null())
+    }
+
+    fn first_color(&self, names: &[&str]) -> Option<[f32; 4]> {
+        names.iter().find_map(|n| self.color(n))
     }
 }
 
@@ -91,8 +124,37 @@ impl Look {
         }
     }
 
-    pub fn of(_material: &Material, _shader: &ShaderInfo) -> Look {
-        todo!()
+    pub fn of(material: &Material, shader: &ShaderInfo) -> Look {
+        let mut look = Look::white();
+        look.mode = shader.mode.unwrap_or(match material.render_queue {
+            q if q >= 3000 => RenderMode::Transparent,
+            q if q >= 2450 => RenderMode::Cutout,
+            _ => RenderMode::Opaque,
+        });
+        if let Some(c) = material.first_color(&["_Color", "_BaseColor", "_MainColor"]) {
+            look.color = c;
+        }
+        if let Some([r, g, b, _]) = material.color("_ShadowColor") {
+            look.shadow_color = [r, g, b];
+        }
+        look.cull = match material.float("_Cull").map(|c| c.round() as i32) {
+            Some(0) => Cull::Off,
+            Some(1) => Cull::Front,
+            _ => Cull::Back,
+        };
+        look.cutoff = material.float("_Cutoff").unwrap_or(0.5);
+        let lil = matches!(shader.family, ShaderFamily::LilToon | ShaderFamily::LilToonLite | ShaderFamily::LilToonMulti);
+        let wants_outline = shader.outline || (shader.family == ShaderFamily::LilToonMulti && material.float("_UseOutline") == Some(1.0));
+        if lil && wants_outline {
+            // lilToon stores the outline width in centimeters.
+            let width = material.float("_OutlineWidth").unwrap_or(0.08) * 0.01;
+            let color = material.color("_OutlineColor").unwrap_or([0.6, 0.56, 0.73, 1.0]);
+            if width > 0.0 {
+                look.outline = Some(Outline { width, color });
+            }
+        }
+        look.draw_surface = !matches!(shader.variant, Variant::OutlineOnly | Variant::FakeShadow | Variant::Internal);
+        look
     }
 }
 

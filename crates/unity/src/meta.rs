@@ -18,19 +18,29 @@ pub struct Meta {
 }
 
 impl Meta {
-    pub fn parse(_text: &str) -> Meta {
-        todo!()
+    pub fn parse(text: &str) -> Meta {
+        let root = yaml::parse(text);
+        let mut meta = Meta { guid: root.get("guid").and_then(Node::as_str).and_then(Guid::parse), ..Meta::default() };
+        let Some((importer, body)) = root.entries().iter().find(|(k, _)| k.ends_with("Importer")) else { return meta };
+        meta.importer = Some(importer.clone());
+        for item in body.get("externalObjects").map(Node::items).unwrap_or_default() {
+            let first = item.get("first");
+            let is_material = first.and_then(|f| f.get("type")).and_then(Node::as_str) == Some("UnityEngine:Material");
+            let name = first.and_then(|f| f.get("name")).and_then(Node::as_str);
+            let target = item.get("second").and_then(Node::reference);
+            if let (true, Some(name), Some(target)) = (is_material, name, target) {
+                meta.external_materials.push((name.to_string(), target));
+            }
+        }
+        meta.global_scale = body.path(&["meshes", "globalScale"]).and_then(Node::as_f32);
+        meta.normal_map = body.get("textureType").and_then(Node::as_i64) == Some(1);
+        meta
     }
 
     /// The `.mat` that replaces the FBX material `name`, if remapped.
-    pub fn material_for(&self, _name: &str) -> Option<Guid> {
-        todo!()
+    pub fn material_for(&self, name: &str) -> Option<Guid> {
+        self.external_materials.iter().find(|(n, _)| n == name).and_then(|(_, r)| r.guid)
     }
-}
-
-#[allow(dead_code)]
-fn unused(_: &Node) {
-    let _ = yaml::parse;
 }
 
 #[cfg(test)]
