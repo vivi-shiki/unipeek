@@ -37,7 +37,7 @@ unipeek = { git = "https://github.com/vivi-shiki/unipeek", tag = "v0.1.0-alpha.1
 
 在子进程里跑，显卡驱动崩溃不会拖垮主程序。`main` 里先认参数：
 
-```rust
+```rust,no_run
 fn main() {
     if std::env::args().any(|a| a == "--thumb-worker") {
         let stdin = std::io::stdin().lock();
@@ -64,11 +64,14 @@ fn main() {
 
 不想开子进程时（比如测试）也能直接调：
 
-```rust
-let gpu = unipeek::Gpu::headless()?;                                   // 一个进程建一次
-let scene = unipeek::Scene::load(unipeek::Input::from_location(path), &unipeek::LoadOptions::default())?; // 只用 CPU
-let image = unipeek::render_thumbnail(&gpu, &scene, &unipeek::ThumbOptions::default())?; // RgbaImage，512²，3q，透明背景
-let report = &scene.report;                                             // 选了哪个 prefab、降级原因
+```rust,no_run
+fn thumbnail(path: &str) -> Result<unipeek::Report, unipeek::Error> {
+    let gpu = unipeek::Gpu::headless()?; // 一个进程建一次
+    let scene = unipeek::Scene::load(unipeek::Input::from_location(path), &unipeek::LoadOptions::default())?; // 只用 CPU
+    let image = unipeek::render_thumbnail(&gpu, &scene, &unipeek::ThumbOptions::default())?; // RgbaImage，512²，3q，透明背景
+    println!("{}x{}", image.width(), image.height());
+    Ok(scene.report) // 选了哪个 prefab、降级原因
+}
 ```
 
 `Scene::load` 不碰 GPU，可以放在后台线程；`unipeek::write_thumbnail(&gpu, location, out, &opts)` 把加载、渲染、编码和写文件一起做完。
@@ -77,7 +80,7 @@ let report = &scene.report;                                             // 选�
 
 `cargo install unipeek` 或直接用编译出的 `unipeek.exe`：
 
-```
+```text
 unipeek info  <输入> [--json]        # 报告，不需要 GPU
 unipeek ls    <输入>                 # 包里的文件
 unipeek thumb <输入> -o out.webp [--size 512] [--view 3q] [--bg transparent]
@@ -91,7 +94,7 @@ unipeek version
 
 第一版只有读回：unipeek 离屏渲染，交出 BGRA 字节，Snowcase 包成 GPUI 的 `RenderImage`。460 px 的抽屉每帧约 1 ms。
 
-```rust
+```rust,ignore
 let mut view = unipeek::Viewport::offscreen(&gpu, width, height);
 let loading = view.load(source, inner); // 后台线程；先出白模，贴图解码完再换上
 
@@ -111,7 +114,7 @@ if let Some(bgra) = view.render() { // 相机和场景都没变时返回 None，
 
 Snowcase 不维护词表，从名字认不出衣装适配哪个 Avatar，所以要靠 GUID：unipeek 列出 prefab 引用了但包里没有的 GUID，Snowcase 实现 `Resolver` 告诉它在哪个包。
 
-```rust
+```rust,ignore
 impl unipeek::Resolver for LibraryResolver {
     fn locate(&self, guids: &[unipeek::Guid]) -> Vec<(unipeek::Guid, unipeek::Located)> {
         // 查 cache.db 的 package_asset 拿到 (fingerprint, member)，
