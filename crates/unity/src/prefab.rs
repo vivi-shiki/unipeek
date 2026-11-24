@@ -64,18 +64,78 @@ pub struct Prefab {
 }
 
 impl Prefab {
-    pub fn parse(_text: &str) -> Prefab {
-        todo!()
+    pub fn parse(text: &str) -> Prefab {
+        let mut p = Prefab::default();
+        let mut refs = std::collections::BTreeSet::new();
+        for doc in yaml::parse_documents(text) {
+            collect_refs(&doc.body, None, &mut refs);
+            if doc.stripped {
+                continue;
+            }
+            let b = &doc.body;
+            let go = || b.get("m_GameObject").and_then(Node::reference).map_or(0, |r| r.file_id);
+            match doc.class_id {
+                1 => p.objects.push(GameObject {
+                    file_id: doc.file_id,
+                    name: b.get("m_Name").and_then(Node::as_str).unwrap_or_default().to_string(),
+                    active: b.get("m_IsActive").and_then(Node::as_i64) != Some(0),
+                }),
+                23 | 137 => p.renderers.push(Renderer {
+                    file_id: doc.file_id,
+                    skinned: doc.class_id == 137,
+                    game_object: go(),
+                    enabled: b.get("m_Enabled").and_then(Node::as_i64) != Some(0),
+                    mesh: b.get("m_Mesh").and_then(Node::reference).filter(|r| !r.is_null()),
+                    materials: b.get("m_Materials").map(Node::items).unwrap_or_default().iter().filter_map(Node::reference).collect(),
+                }),
+                33 => {
+                    if let Some(mesh) = b.get("m_Mesh").and_then(Node::reference).filter(|r| !r.is_null()) {
+                        p.mesh_filters.push((go(), mesh));
+                    }
+                }
+                1001 => {
+                    let Some(source) = b.get("m_SourcePrefab").and_then(Node::reference) else { continue };
+                    let m = b.get("m_Modification");
+                    let parent = m.and_then(|m| m.get("m_TransformParent")).and_then(Node::reference).map_or(0, |r| r.file_id);
+                    let modifications = m
+                        .and_then(|m| m.get("m_Modifications"))
+                        .map(Node::items)
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|n| {
+                            Some(Modification {
+                                target: n.get("target")?.reference()?,
+                                property: n.get("propertyPath").and_then(Node::as_str).unwrap_or_default().to_string(),
+                                value: n.get("value").and_then(Node::as_str).map(str::to_string),
+                                reference: n.get("objectReference").and_then(Node::reference).filter(|r| !r.is_null()),
+                            })
+                        })
+                        .collect();
+                    p.instances.push(Instance { file_id: doc.file_id, source, parent, modifications });
+                }
+                _ => {}
+            }
+        }
+        p.references = refs.into_iter().collect();
+        p
     }
 
     /// A prefab variant has a root `PrefabInstance` without a parent transform.
     pub fn is_variant(&self) -> bool {
-        todo!()
+        self.instances.iter().any(|i| i.parent == 0)
     }
 
     /// Materials assigned by renderers and by `m_Materials` modifications.
     pub fn material_refs(&self) -> Vec<Guid> {
-        todo!()
+        let from_renderers = self.renderers.iter().flat_map(|r| r.materials.iter().copied());
+        let from_overrides = self.material_overrides().filter_map(|(_, m)| m.reference);
+        let mut out: Vec<Guid> = Vec::new();
+        for g in from_renderers.chain(from_overrides).filter_map(|r| r.guid) {
+            if !g.is_zero() && !out.contains(&g) {
+                out.push(g);
+            }
+        }
+        out
     }
 
     /// Modifications that replace a material slot (`m_Materials.Array.data[i]`).
@@ -84,9 +144,41 @@ impl Prefab {
     }
 }
 
-#[allow(dead_code)]
-fn unused(_: &Node) {
-    let _ = yaml::parse_documents;
+/// Walk a document and record every GUID reference with the usage its key implies.
+fn collect_refs(node: &Node, key: Option<&str>, out: &mut std::collections::BTreeSet<(Guid, Usage)>) {
+    match node {
+        Node::Map(entries) => {
+            if let Some(r) = node.reference()
+                && let Some(guid) = r.guid.filter(|g| !g.is_zero())
+            {
+                out.insert((guid, usage_of(key)));
+                return;
+            }
+            let path = node.get("propertyPath").and_then(Node::as_str);
+            for (k, v) in entries {
+                let usage_key = match (k.as_str(), path) {
+                    ("objectReference", Some(p)) if p.starts_with("m_Materials") => "m_Materials",
+                    ("objectReference", Some(p)) if p.starts_with("m_Mesh") => "m_Mesh",
+                    (k, _) => k,
+                };
+                collect_refs(v, Some(usage_key), out);
+            }
+        }
+        Node::Seq(items) => items.iter().for_each(|i| collect_refs(i, key, out)),
+        _ => {}
+    }
+}
+
+fn usage_of(key: Option<&str>) -> Usage {
+    match key.unwrap_or_default() {
+        "m_SourcePrefab" | "target" | "m_CorrespondingSourceObject" | "m_PrefabAsset" => Usage::Prefab,
+        "m_Mesh" | "m_SharedMesh" => Usage::Mesh,
+        "m_Materials" | "m_Material" => Usage::Material,
+        "m_Texture" => Usage::Texture,
+        "m_Shader" => Usage::Shader,
+        "m_Script" => Usage::Script,
+        _ => Usage::Other,
+    }
 }
 
 #[cfg(test)]
