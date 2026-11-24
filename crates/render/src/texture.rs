@@ -1,29 +1,4 @@
 //! Texture decoding and mip generation on the CPU, so a UI thread never waits on it.
-use std::path::{Path, PathBuf};
-
-pub const MAX_SIZE: u32 = 2048;
-
-pub fn guess_texture(dir: &Path, material: &str) -> Option<PathBuf> {
-    let key = material.to_lowercase();
-    let mut best: Option<PathBuf> = None;
-    for e in std::fs::read_dir(dir).ok()?.flatten() {
-        let p = e.path();
-        if p.extension().and_then(|s| s.to_str()) != Some("png") {
-            continue;
-        }
-        let stem = p.file_stem()?.to_str()?.to_lowercase();
-        if stem.ends_with(&key) && best.as_ref().is_none_or(|b| p.as_os_str().len() < b.as_os_str().len()) {
-            best = Some(p);
-        }
-    }
-    best
-}
-
-/// RGBA8 mip chain, largest first, base clamped to MAX_SIZE.
-pub fn load_mips(path: &Path) -> anyhow::Result<Vec<image::RgbaImage>> {
-    let img = image::open(path)?.to_rgba8();
-    Ok(mips(clamp(img, MAX_SIZE)))
-}
 
 /// Decode PNG or JPEG bytes. Returns the image scaled to `max` on its longest side and the original size.
 pub fn decode(bytes: &[u8], max: u32) -> Result<(image::RgbaImage, [u32; 2]), String> {

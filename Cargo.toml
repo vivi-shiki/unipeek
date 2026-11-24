@@ -3,15 +3,15 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/vivi-shiki/unipeek"
 rust-version = "1.89"
 
 [workspace.dependencies]
-unipeek = { path = "crates/render" }
-unipeek-unity = { path = "crates/unity" }
+unipeek = { path = "crates/render", version = "=0.1.0-alpha.1" }
+unipeek-unity = { path = "crates/unity", version = "=0.1.0-alpha.1" }
 wgpu = "30"
 glam = "0.30"
 bytemuck = { version = "1", features = ["derive"] }

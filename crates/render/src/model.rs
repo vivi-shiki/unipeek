@@ -1,5 +1,4 @@
 //! FBX -> flat triangle soup, grouped by material slot.
-use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
@@ -44,10 +43,12 @@ impl Model {
         self.vertices.len() / 3
     }
 
-    pub fn load_fbx(path: &str) -> Result<Model> {
-        let scene = ufbx::load_file(path, load_opts()).map_err(|e| anyhow::anyhow!("ufbx: {:?}", e.description)).with_context(|| format!("loading {path}"))?;
+    pub fn load_fbx(path: &str) -> crate::Result<Model> {
+        let scene = ufbx::load_file(path, load_opts()).map_err(|e| crate::Error::Fbx(format!("{path}: {}", e.description)))?;
         let model = Model::from_scene(&scene);
-        anyhow::ensure!(!model.vertices.is_empty(), "no mesh data in {path}");
+        if model.vertices.is_empty() {
+            return Err(crate::Error::Fbx(format!("{path}: no mesh data")));
+        }
         Ok(model)
     }
 

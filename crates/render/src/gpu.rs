@@ -1,5 +1,4 @@
 //! Device setup shared by every front end.
-use anyhow::{Context, Result};
 
 pub struct Gpu {
     pub instance: wgpu::Instance,
@@ -10,14 +9,14 @@ pub struct Gpu {
 
 impl Gpu {
     /// `surface`: the surface the device must be able to present to, if any.
-    pub fn new(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Result<Gpu> {
+    pub fn new(instance: wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> crate::Result<Gpu> {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: surface,
             ..Default::default()
         }))
-        .context("no suitable GPU adapter")?;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).context("request_device")?;
+        .map_err(|e| crate::Error::NoGpu(e.to_string()))?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).map_err(|e| crate::Error::Gpu(e.to_string()))?;
         Ok(Gpu { instance, adapter, device, queue })
     }
 
@@ -28,7 +27,7 @@ impl Gpu {
         for backends in [wgpu::Backends::DX12, wgpu::Backends::VULKAN | wgpu::Backends::METAL, wgpu::Backends::all()] {
             match Gpu::new(Gpu::instance(backends), None) {
                 Ok(gpu) => return Ok(gpu),
-                Err(e) => errors.push(format!("{backends:?}: {e:#}")),
+                Err(e) => errors.push(format!("{backends:?}: {e}")),
             }
         }
         Err(crate::Error::NoGpu(errors.join("; ")))

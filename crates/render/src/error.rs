@@ -10,6 +10,8 @@ pub enum Error {
     Gpu(String),
     #[error("nothing to show in {0}")]
     NothingToShow(String),
+    #[error("fbx: {0}")]
+    Fbx(String),
     #[error("image: {0}")]
     Image(String),
     #[error("io error: {0}")]
