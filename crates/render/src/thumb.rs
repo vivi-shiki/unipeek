@@ -137,6 +137,36 @@ fn srgb_to_linear(c: f64) -> f64 {
     if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
 }
 
+impl Background {
+    /// `transparent`, `#rrggbb` or `#rrggbbaa`.
+    pub fn parse(s: &str) -> std::result::Result<Background, String> {
+        if s == "transparent" {
+            return Ok(Background::Transparent);
+        }
+        let hex = s.strip_prefix('#').filter(|h| (h.len() == 6 || h.len() == 8) && h.bytes().all(|b| b.is_ascii_hexdigit()));
+        let Some(hex) = hex else { return Err(format!("background {s:?} is not transparent, #rrggbb or #rrggbbaa")) };
+        let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0);
+        Ok(Background::Color([byte(0), byte(2), byte(4), if hex.len() == 8 { byte(6) } else { 255 }]))
+    }
+}
+
+/// Load `location` (a path, optionally with `#inner/path`), render it and write `out` (`.png` or
+/// `.webp`) through a temporary file. Returns the report of the loaded scene.
+pub fn write_thumbnail(gpu: &Gpu, location: &str, out: &std::path::Path, opts: &ThumbOptions) -> Result<unipeek_unity::Report> {
+    let format = ImageFormat::from_path(out).ok_or_else(|| Error::Image(format!("{} must end with .png or .webp", out.display())))?;
+    let load = crate::LoadOptions { max_texture: (opts.size.saturating_mul(2)).clamp(256, 2048), ..Default::default() };
+    let scene = Scene::load(unipeek_unity::Input::from_location(location), &load)?;
+    let img = render_thumbnail(gpu, &scene, opts)?;
+    let bytes = encode(&img, format)?;
+    if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = out.with_file_name(format!("{}.tmp", out.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()));
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, out)?;
+    Ok(scene.report)
+}
+
 /// Lossless PNG or WebP.
 pub fn encode(img: &image::RgbaImage, format: ImageFormat) -> Result<Vec<u8>> {
     let mut out = std::io::Cursor::new(Vec::new());

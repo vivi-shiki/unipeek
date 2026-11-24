@@ -17,3 +17,14 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+impl Error {
+    /// How a failed request is reported: inputs unipeek cannot read are "unsupported", the rest "error".
+    pub fn status(&self) -> unipeek_unity::Status {
+        use unipeek_unity::{Error as U, Status};
+        match self {
+            Error::NothingToShow(_) | Error::Unity(U::Unsupported(_) | U::NotUnityPackage(_)) => Status::Unsupported,
+            _ => Status::Error,
+        }
+    }
+}
