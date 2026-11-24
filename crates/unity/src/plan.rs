@@ -86,6 +86,8 @@ pub struct Binding {
     pub source: BindSource,
     pub material: Option<Guid>,
     pub material_name: Option<String>,
+    /// `pathname` of the bound `.mat`.
+    pub material_path: Option<String>,
     pub shader: Option<ShaderInfo>,
     pub look: Look,
     pub main_texture: Option<TextureRef>,
@@ -174,7 +176,7 @@ impl Plan {
             return bind_material(index, mat, BindSource::ExternalObject);
         }
         if slot.trim().is_empty() {
-            return Binding { source: BindSource::Unbound, material: None, material_name: None, shader: None, look: Look::white(), main_texture: None, unreadable: None };
+            return Binding { source: BindSource::Unbound, material: None, material_name: None, material_path: None, shader: None, look: Look::white(), main_texture: None, unreadable: None };
         }
         let named = |e: &Entry| -> bool {
             let name = e.text.as_deref().and_then(Material::parse).map(|m| m.name);
@@ -195,7 +197,7 @@ impl Plan {
             .filter(|e| e.stem().is_some_and(|s| s.to_lowercase().ends_with(&slot_lower)))
             .filter(|e| !is_normal_map(e))
             .max_by_key(closest);
-        let mut binding = Binding { source: BindSource::Unbound, material: None, material_name: None, shader: None, look: Look::white(), main_texture: None, unreadable: None };
+        let mut binding = Binding { source: BindSource::Unbound, material: None, material_name: None, material_path: None, shader: None, look: Look::white(), main_texture: None, unreadable: None };
         if let Some(t) = texture {
             binding.source = BindSource::TextureName;
             binding.main_texture = Some(TextureRef { guid: t.guid, path: t.pathname.clone(), in_package: true });
@@ -232,8 +234,26 @@ fn common_prefix(a: &str, b: &str) -> usize {
 }
 
 fn bind_material(index: &PackageIndex, mat: Guid, source: BindSource) -> Binding {
-    let mut b = Binding { source, material: Some(mat), material_name: None, shader: None, look: Look::white(), main_texture: None, unreadable: None };
-    let Some(m) = index.get(&mat).and_then(|e| e.text.as_deref()).and_then(Material::parse) else { return b };
+    let entry = index.get(&mat);
+    let mut b = Binding {
+        source,
+        material: Some(mat),
+        material_name: None,
+        material_path: entry.and_then(|e| e.pathname.clone()),
+        shader: None,
+        look: Look::white(),
+        main_texture: None,
+        unreadable: None,
+    };
+    let Some(entry) = entry.filter(|e| e.size.is_some()) else { return b };
+    let Some(m) = entry.text.as_deref().and_then(Material::parse) else {
+        b.unreadable = Some(match entry.kind {
+            AssetKind::Yaml if entry.text.is_none() => "too large to read".into(),
+            AssetKind::Yaml => "no Material document".into(),
+            _ => "binary serialization; only text YAML is read".into(),
+        });
+        return b;
+    };
     let shader_ref = m.shader.unwrap_or(ObjRef { file_id: 0, guid: None, kind: None });
     let name_in_package = shader_ref.guid.and_then(|g| index.get(&g)).and_then(|e| e.shader_name.as_deref());
     let shader = shader::identify(shader_ref, name_in_package);

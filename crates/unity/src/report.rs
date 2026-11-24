@@ -133,6 +133,10 @@ impl Report {
         {
             self.degrade(Degrade::UnknownShader { material: label.clone(), shader: shader.name.clone() });
         }
+        if let Some(reason) = &binding.unreadable {
+            let material = binding.material_path.clone().unwrap_or_else(|| label.clone());
+            self.degrade(Degrade::MaterialUnreadable { material, reason: reason.clone() });
+        }
         if let Some(tex) = &binding.main_texture
             && !tex.in_package
         {
