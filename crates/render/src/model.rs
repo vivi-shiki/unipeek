@@ -13,6 +13,8 @@ pub struct Vertex {
 
 pub struct Part {
     pub material: String,
+    /// Index of the material in its mesh, which is the submesh slot of a Unity renderer.
+    pub slot: usize,
     pub mesh: String,
     pub first: u32,
     pub count: u32,
@@ -98,7 +100,7 @@ impl Model {
                     }
                 }
                 let material = mesh.materials.get(part.index as usize).map(|m| m.element.name.to_string()).unwrap_or_default();
-                parts.push(Part { material, mesh: node.element.name.to_string(), first, count: vertices.len() as u32 - first });
+                parts.push(Part { material, slot: part.index as usize, mesh: node.element.name.to_string(), first, count: vertices.len() as u32 - first });
             }
         }
         if vertices.is_empty() {

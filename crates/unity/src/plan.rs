@@ -26,6 +26,15 @@ pub struct PlannedModel {
     pub size: Option<u64>,
 }
 
+/// Materials a prefab renderer assigns to the mesh on one FBX node, by submesh slot.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct RendererMaterials {
+    pub model: Guid,
+    /// Name of the renderer's game object, which Unity names after the FBX node.
+    pub object: String,
+    pub materials: Vec<Option<Guid>>,
+}
+
 /// A GUID the plan needs that is not in the package.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct MissingRef {
@@ -42,6 +51,8 @@ pub struct Plan {
     pub models: Vec<PlannedModel>,
     /// Materials the prefab assigns (renderers, overrides), used to bind FBX slots by name.
     pub prefab_materials: Vec<Guid>,
+    /// Renderers in the prefab that draw meshes of the models.
+    pub renderer_materials: Vec<RendererMaterials>,
     pub missing: Vec<MissingRef>,
     /// `m_Materials` overrides on model instances; their target renderer cannot be resolved yet.
     pub material_overrides: usize,
@@ -128,6 +139,7 @@ impl Plan {
             });
             plan.models = walk.models.iter().filter_map(|g| index.get(g)).map(planned).collect();
             plan.prefab_materials = walk.materials;
+            plan.renderer_materials = walk.renderers;
             plan.missing = walk.missing.into_iter().collect();
             plan.material_overrides = walk.overrides;
         }
@@ -140,7 +152,12 @@ impl Plan {
 
     /// Like `bind`, but first uses the material a prefab renderer assigns to slot `slot_index` of
     /// the mesh on the FBX node `object`.
-    pub fn bind_slot(&self, index: &PackageIndex, model: Guid, _object: &str, _slot_index: usize, slot: &str) -> Binding {
+    pub fn bind_slot(&self, index: &PackageIndex, model: Guid, object: &str, slot_index: usize, slot: &str) -> Binding {
+        let mine: Vec<&RendererMaterials> = self.renderer_materials.iter().filter(|r| r.model == model).collect();
+        let renderer = mine.iter().find(|r| r.object.eq_ignore_ascii_case(object)).or(if mine.len() == 1 { mine.first() } else { None });
+        if let Some(Some(mat)) = renderer.and_then(|r| r.materials.get(slot_index)) {
+            return bind_material(index, *mat, BindSource::PrefabRenderer);
+        }
         self.bind(index, model, slot)
     }
 
@@ -149,6 +166,9 @@ impl Plan {
         let model_entry = index.get(&model);
         if let Some(mat) = model_entry.and_then(|e| e.meta.as_deref()).map(Meta::parse).and_then(|m| m.material_for(slot)) {
             return bind_material(index, mat, BindSource::ExternalObject);
+        }
+        if slot.trim().is_empty() {
+            return Binding { source: BindSource::Unbound, material: None, material_name: None, shader: None, look: Look::white(), main_texture: None };
         }
         let named = |e: &Entry| -> bool {
             let name = e.text.as_deref().and_then(Material::parse).map(|m| m.name);
@@ -167,6 +187,7 @@ impl Plan {
             .entries()
             .filter(|e| matches!(e.kind, AssetKind::Png | AssetKind::Jpeg | AssetKind::Psd))
             .filter(|e| e.stem().is_some_and(|s| s.to_lowercase().ends_with(&slot_lower)))
+            .filter(|e| !is_normal_map(e))
             .max_by_key(closest);
         let mut binding = Binding { source: BindSource::Unbound, material: None, material_name: None, shader: None, look: Look::white(), main_texture: None };
         if let Some(t) = texture {
@@ -187,6 +208,11 @@ fn is_prefab(e: &Entry) -> bool {
 
 fn is_model(e: &Entry) -> bool {
     e.kind == AssetKind::Fbx || e.extension().as_deref() == Some("fbx")
+}
+
+/// Normal maps are never main textures: `textureType: 1` in the `.meta`, or "normal" in the name.
+fn is_normal_map(e: &Entry) -> bool {
+    e.meta.as_deref().is_some_and(|m| Meta::parse(m).normal_map) || e.stem().is_some_and(|s| s.to_lowercase().contains("normal"))
 }
 
 fn common_prefix(a: &str, b: &str) -> usize {
@@ -213,6 +239,7 @@ fn bind_material(index: &PackageIndex, mat: Guid, source: BindSource) -> Binding
 struct Walk {
     models: Vec<Guid>,
     materials: Vec<Guid>,
+    renderers: Vec<RendererMaterials>,
     missing: BTreeSet<MissingRef>,
     overrides: usize,
 }
@@ -263,6 +290,11 @@ impl Walker<'_> {
             if index.get(g).is_none_or(|e| e.size.is_none()) && *usage != Usage::Other {
                 walk.missing.insert(MissingRef { guid: *g, usage: *usage });
             }
+        }
+        for r in &prefab.renderers {
+            let Some(model) = r.mesh.and_then(|m| m.guid).filter(|g| index.get(g).is_some_and(is_model)) else { continue };
+            let object = prefab.objects.iter().find(|o| o.file_id == r.game_object).map(|o| o.name.clone()).unwrap_or_default();
+            walk.renderers.push(RendererMaterials { model, object, materials: r.materials.iter().map(|m| m.guid.filter(|g| !g.is_zero())).collect() });
         }
         let sources = prefab.instances.iter().filter_map(|i| i.source.guid);
         let meshes = prefab.renderers.iter().filter_map(|r| r.mesh).chain(prefab.mesh_filters.iter().map(|(_, m)| *m)).filter_map(|m| m.guid);

@@ -91,16 +91,17 @@ impl Scene {
 
         let mut materials: Vec<SceneMaterial> = Vec::new();
         let mut material_textures: Vec<Option<Guid>> = Vec::new();
-        let mut slots: BTreeMap<(Guid, String), usize> = BTreeMap::new();
+        let mut material_slots: Vec<(String, String)> = Vec::new();
+        let mut slots: BTreeMap<(Guid, String, usize, String), usize> = BTreeMap::new();
         let mut vertices = Vec::new();
         let mut parts = Vec::new();
         for (planned, model) in &models {
             let offset = vertices.len() as u32;
             vertices.extend_from_slice(&model.vertices);
             for part in &model.parts {
-                let key = (planned.guid, part.material.clone());
+                let key = (planned.guid, part.mesh.clone(), part.slot, part.material.clone());
                 let material = *slots.entry(key).or_insert_with(|| {
-                    let binding = plan.bind(&pkg.index, planned.guid, &part.material);
+                    let binding = plan.bind_slot(&pkg.index, planned.guid, &part.mesh, part.slot, &part.material);
                     report.add_binding(&planned.path, &part.material, &binding);
                     materials.push(SceneMaterial {
                         name: binding.material_name.clone().unwrap_or_else(|| part.material.clone()),
@@ -108,6 +109,7 @@ impl Scene {
                         texture: None,
                     });
                     material_textures.push(binding.main_texture.filter(|t| t.in_package).map(|t| t.guid));
+                    material_slots.push((planned.path.clone(), part.material.clone()));
                     materials.len() - 1
                 });
                 parts.push(Part { material, first: part.first + offset, count: part.count });
@@ -129,7 +131,10 @@ impl Scene {
         for (i, tex) in material_textures.iter().enumerate() {
             let Some(Ok((mips, size))) = tex.and_then(|g| decoded.get(&g)) else { continue };
             materials[i].texture = Some(mips.clone());
-            report.materials[i].texture_size = Some(*size);
+            let (model, slot) = &material_slots[i];
+            if let Some(r) = report.materials.iter_mut().find(|r| &r.model == model && &r.slot == slot) {
+                r.texture_size = Some(*size);
+            }
         }
         report.read = pkg.index.stats;
 
