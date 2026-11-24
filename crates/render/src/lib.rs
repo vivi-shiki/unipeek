@@ -5,6 +5,7 @@ pub mod model;
 pub mod renderer;
 pub mod scene;
 pub mod texture;
+pub mod thumb;
 
 pub use error::{Error, Result};
 pub use glam;
