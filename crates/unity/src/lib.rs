@@ -4,6 +4,8 @@ pub mod guid;
 pub mod material;
 pub mod meta;
 pub mod package;
+pub mod plan;
+pub mod prefab;
 pub mod shader;
 pub mod source;
 #[cfg(any(test, feature = "testing"))]
@@ -12,5 +14,6 @@ pub mod yaml;
 
 pub use error::{Error, Result};
 pub use guid::Guid;
+pub use plan::{Binding, Plan};
 pub use package::{AssetKind, Entry, IndexOptions, PackageIndex, PackageIssue, ReadStats};
 pub use source::{Input, Source};
