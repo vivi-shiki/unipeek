@@ -132,3 +132,63 @@ fn view_names() {
     }
     assert!("top".parse::<View>().is_err());
 }
+
+const LIL_OUTLINE: &str = "efa77a80ca0344749b4f19fdd5891cbe";
+const LIL_TRANS: &str = "165365ab7100a044ca85fc8c33548a62";
+
+fn cube(shader: &str) -> Scene {
+    let mat = material_yaml("Box", shader, 4800000, Some(RED_TEX), -1)
+        .replace("_OutlineWidth: 0.08", "_OutlineWidth: 5")
+        .replace("_OutlineColor: {r: 0.2, g: 0.1, b: 0.1, a: 1}", "_OutlineColor: {r: 0, g: 1, b: 0, a: 1}")
+        .replace("g: 0.5, b: 0.25", "g: 1, b: 1");
+    let bytes = PackageBuilder::new()
+        .asset_with_meta(MODEL, "Assets/S/Box.fbx", unipeek::unity::testing::fbx_ascii_cube("Box"), model_meta(MODEL, &[("Box", RED_MAT)]))
+        .asset(RED_MAT, "Assets/S/Box.mat", mat)
+        .asset(RED_TEX, "Assets/S/Red.png", png(16, 16, [255, 0, 0, 255]))
+        .asset(PREFAB, "Assets/S/Box.prefab", prefab_instancing(MODEL, &[]))
+        .build();
+    Scene::load(input(bytes), &LoadOptions::default()).unwrap()
+}
+
+#[test]
+fn liltoon_outline_is_drawn_around_the_silhouette() {
+    let Some(gpu) = gpu("outline") else { return };
+    let green = |img: &image::RgbaImage| img.pixels().filter(|p| p.0[1] > 150 && p.0[0] < 80 && p.0[3] > 200).count();
+    let with = thumb::render_thumbnail(&gpu, &cube(LIL_OUTLINE), &opts(View::ThreeQuarter)).unwrap();
+    let without = thumb::render_thumbnail(&gpu, &cube(LILTOON), &opts(View::ThreeQuarter)).unwrap();
+    assert!(green(&with) > 50, "outline pixels: {}", green(&with));
+    assert_eq!(green(&without), 0);
+    let covered = |img: &image::RgbaImage| img.pixels().filter(|p| p.0[3] > 0).count();
+    assert!(covered(&with) > covered(&without), "the outline grows the silhouette");
+}
+
+#[test]
+fn transparent_variants_blend_and_opaque_ones_do_not() {
+    let Some(gpu) = gpu("transparency") else { return };
+    let glass = |shader: &str| {
+        let bytes = PackageBuilder::new()
+            .asset_with_meta(MODEL, "Assets/S/Glass.fbx", fbx_ascii(&["Glass"]), model_meta(MODEL, &[("Glass", RED_MAT)]))
+            .asset(RED_MAT, "Assets/S/Glass.mat", material_yaml("Glass", shader, 4800000, Some(RED_TEX), -1).replace("g: 0.5, b: 0.25", "g: 1, b: 1"))
+            .asset(RED_TEX, "Assets/S/Glass.png", png(16, 16, [255, 0, 0, 128]))
+            .asset(PREFAB, "Assets/S/Glass.prefab", prefab_instancing(MODEL, &[]))
+            .build();
+        let scene = Scene::load(input(bytes), &LoadOptions::default()).unwrap();
+        thumb::render_thumbnail(&gpu, &scene, &opts(View::Front)).unwrap()
+    };
+    let center = |img: &image::RgbaImage| img.get_pixel(64, 64).0;
+    let [r, g, b, a] = center(&glass(LIL_TRANS));
+    assert!((100..=160).contains(&a), "half transparent: alpha {a}");
+    assert!(r > 150 && g < 60 && b < 60, "straight alpha keeps the color: {r} {g} {b}");
+    assert_eq!(center(&glass(LILTOON))[3], 255, "opaque variants ignore texture alpha");
+}
+
+#[test]
+fn gpu_fallback_is_recorded() {
+    if gpu("fallback").is_none() {
+        return;
+    }
+    let gpu = unipeek::Gpu::headless_from(&[unipeek::wgpu::Backends::empty(), unipeek::wgpu::Backends::all()]).unwrap();
+    assert_eq!(gpu.fallback.len(), 1, "{:?}", gpu.fallback);
+    assert!(!gpu.describe().is_empty());
+    assert!(unipeek::Gpu::headless().unwrap().describe().contains(':'));
+}

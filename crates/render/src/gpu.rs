@@ -5,6 +5,8 @@ pub struct Gpu {
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// Backends tried before this one, with why they failed (DX12 failing on some drivers).
+    pub fallback: Vec<String>,
 }
 
 impl Gpu {
@@ -17,7 +19,7 @@ impl Gpu {
         }))
         .map_err(|e| crate::Error::NoGpu(e.to_string()))?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).map_err(|e| crate::Error::Gpu(e.to_string()))?;
-        Ok(Gpu { instance, adapter, device, queue })
+        Ok(Gpu { instance, adapter, device, queue, fallback: Vec::new() })
     }
 
     /// A device for offscreen rendering (thumbnails, readback viewports), without any window.
@@ -31,6 +33,16 @@ impl Gpu {
             }
         }
         Err(crate::Error::NoGpu(errors.join("; ")))
+    }
+
+    /// Like `headless`, trying the given backend sets in order.
+    pub fn headless_from(_order: &[wgpu::Backends]) -> crate::Result<Gpu> {
+        todo!()
+    }
+
+    /// The adapter's backend and name, e.g. `Dx12: NVIDIA GeForce RTX 2060`.
+    pub fn describe(&self) -> String {
+        todo!()
     }
 
     pub fn instance(backends: wgpu::Backends) -> wgpu::Instance {

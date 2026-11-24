@@ -83,6 +83,8 @@ fn thumb_writes_the_file_and_reports_degrades() {
     assert_eq!(replies[0]["out"], out.display().to_string());
     assert_eq!(replies[0]["prefab"], "Assets/Shop/Quads.prefab");
     assert!(replies[0]["reasons"].as_array().unwrap().is_empty());
+    assert!(replies[0]["backend"].as_str().is_some_and(|b| !b.is_empty()), "which GPU rendered it: {:?}", replies[0]);
+    assert!(replies[0]["fallback"].is_array());
     let img = image::open(&out).unwrap();
     assert_eq!((img.width(), img.height()), (64, 64));
     assert!(!dir.0.join("thumbs/ab/quads.webp.tmp").exists(), "written through a temporary file");

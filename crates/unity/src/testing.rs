@@ -215,5 +215,25 @@ pub fn fbx_ascii(materials: &[&str]) -> String {
     s
 }
 
+/// An ASCII FBX 7.4 unit cube (edge 1 m, centered at the origin) with one material, for outlines.
+pub fn fbx_ascii_cube(material: &str) -> String {
+    let v = [(-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1), (-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1)];
+    let faces = [[4, 5, 6, 7], [1, 0, 3, 2], [5, 1, 2, 6], [0, 4, 7, 3], [7, 6, 2, 3], [0, 1, 5, 4]];
+    let vertices: Vec<String> = v.iter().map(|(x, y, z)| format!("{},{},{}", *x as f32 * 0.5, *y as f32 * 0.5, *z as f32 * 0.5)).collect();
+    let indices: Vec<String> = faces.iter().map(|f| format!("{},{},{},{}", f[0], f[1], f[2], -(f[3] as i64) - 1)).collect();
+    // Start from the one-quad file and swap its geometry, UV indices and per-face materials.
+    let quad = fbx_ascii(&[material]);
+    let start = quad.find("\t\tVertices:").unwrap();
+    let end = quad.find("\t\tLayerElementUV").unwrap();
+    let geometry = format!(
+        "\t\tVertices: *24 {{\n\t\t\ta: {}\n\t\t}}\n\t\tPolygonVertexIndex: *24 {{\n\t\t\ta: {}\n\t\t}}\n",
+        vertices.join(","),
+        indices.join(",")
+    );
+    let cube = format!("{}{}{}", &quad[..start], geometry, &quad[end..]);
+    cube.replace("UVIndex: *4 {\n\t\t\t\ta: 0,1,2,3", &format!("UVIndex: *24 {{\n\t\t\t\ta: {}", ["0,1,2,3"; 6].join(",")))
+        .replace("Materials: *1 {\n\t\t\t\ta: 0", "Materials: *6 {\n\t\t\t\ta: 0,0,0,0,0,0")
+}
+
 pub const FBX_BINARY_MAGIC: &[u8] = b"Kaydara FBX Binary  \x00\x1a\x00";
 pub const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
