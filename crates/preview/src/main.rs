@@ -1,6 +1,9 @@
 //! Minimal test of ways to show a wgpu-rendered model inside a GPUI window on Windows.
 //!
-//!   preview <mode> <model.fbx> <texture dir> [WIDTHxHEIGHT]
+//!   preview <mode> <input> [WIDTHxHEIGHT]
+//!
+//! `<input>` is anything unipeek opens: a unitypackage (optionally `#Assets/.../X.prefab`), a zip,
+//! a folder or an FBX with its textures next to it.
 //!
 //! modes: `overlay`  - own topmost DirectComposition layer on upstream GPUI (zero-copy)
 //!        `readback` - offscreen render, read back, show as a GPUI `RenderImage`
@@ -11,9 +14,9 @@ mod backend;
 
 use backend::{Readback, Rect, TopmostLayer};
 use gpui_kit::{prelude::FluentBuilder, *};
-use unipeek::{camera::Orbit, model::Model};
+use unipeek::{LoadOptions, Scene, camera::Orbit, unity::Input};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use std::{path::PathBuf, sync::Arc, time::Instant};
+use std::{sync::Arc, time::Instant};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Mode {
@@ -32,8 +35,7 @@ struct Stats {
 
 struct Preview {
     mode: Mode,
-    model: Model,
-    textures: PathBuf,
+    scene: Scene,
     camera: Orbit,
     rect: Rect,
     dirty: bool,
@@ -87,7 +89,7 @@ impl Preview {
             Mode::Overlay => {
                 if self.layer.is_none() {
                     let t = Instant::now();
-                    self.layer = Some(TopmostLayer::new(hwnd_of(window)?, &self.model, &self.textures)?);
+                    self.layer = Some(TopmostLayer::new(hwnd_of(window)?, &self.scene)?);
                     eprintln!("[overlay] layer + renderer ready in {:?}", t.elapsed());
                     self.dirty = true;
                 }
@@ -106,7 +108,7 @@ impl Preview {
             #[cfg(feature = "fast")]
             Mode::Fast => {
                 if self.fast.is_none() {
-                    self.fast = Some(fast::FastLayer::new(window, &self.model, &self.textures)?);
+                    self.fast = Some(fast::FastLayer::new(window, &self.scene)?);
                     self.dirty = true;
                 }
                 let layer = self.fast.as_mut().unwrap();
@@ -131,7 +133,7 @@ impl Preview {
             return Ok(());
         }
         if self.readback.is_none() {
-            self.readback = Some(Readback::new(&self.model, &self.textures)?);
+            self.readback = Some(Readback::new(&self.scene)?);
         }
         let t = Instant::now();
         let (w, h) = (self.rect.w, self.rect.h);
@@ -247,7 +249,7 @@ impl Render for Preview {
                 },
             )))
             .child(button("reset", "Reset view".into()).on_click(cx.listener(|this, _, _, cx| {
-                this.camera = Orbit::fit(this.model.min, this.model.max);
+                this.camera = Orbit::fit(this.scene.min, this.scene.max);
                 this.dirty = true;
                 cx.notify();
             })))
@@ -279,7 +281,7 @@ impl Render for Preview {
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    anyhow::ensure!(args.len() >= 4, "usage: preview <overlay|readback|fast> <model.fbx> <texture dir> [WxH]");
+    anyhow::ensure!(args.len() >= 3, "usage: preview <overlay|readback|fast> <input> [WxH]");
     let mode = match args[1].as_str() {
         "overlay" => Mode::Overlay,
         "readback" => Mode::Readback,
@@ -291,14 +293,14 @@ fn main() -> anyhow::Result<()> {
         eprintln!("note: overlay mode is meant for upstream GPUI; this build uses gpui-fast");
     }
     let (w, h) = args
-        .get(4)
+        .get(3)
         .and_then(|s| s.split_once('x'))
         .map(|(w, h)| (w.parse().unwrap(), h.parse().unwrap()))
         .unwrap_or((1100.0f32, 800.0f32));
     let t = Instant::now();
-    let model = Model::load_fbx(&args[2])?;
-    eprintln!("[model] {} triangles in {:?}", model.triangles(), t.elapsed());
-    let textures = PathBuf::from(&args[3]);
+    let scene = Scene::load(Input::from_location(&args[2]), &LoadOptions::default())?;
+    eprintln!("[scene] {} triangles, {} materials in {:?}", scene.triangles(), scene.materials.len(), t.elapsed());
+    anyhow::ensure!(!scene.is_empty(), "nothing to show: {:?}", scene.report.degrades);
     let spin = std::env::var("LAB_SPIN").is_ok();
     let quit_after = std::env::var("LAB_SECS").ok().and_then(|s| s.parse().ok());
 
@@ -311,9 +313,8 @@ fn main() -> anyhow::Result<()> {
         gpui_kit::open_window(options, cx, |_, cx| {
             cx.new(|_| Preview {
                 mode,
-                camera: Orbit::fit(model.min, model.max),
-                model,
-                textures,
+                camera: Orbit::fit(scene.min, scene.max),
+                scene,
                 rect: Rect::default(),
                 dirty: true,
                 spin,

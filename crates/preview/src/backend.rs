@@ -1,7 +1,7 @@
 //! The presentation paths under test. Each one shows frames from the same `Renderer`.
 use anyhow::{Context, Result, bail};
-use unipeek::{camera::Orbit, gpu::Gpu, model::Model, renderer::Renderer, wgpu};
-use std::{ffi::c_void, path::Path, time::Instant};
+use unipeek::{Scene, camera::Orbit, gpu::Gpu, renderer::Renderer, wgpu};
+use std::{ffi::c_void, time::Instant};
 use windows::{
     Win32::{Foundation::HWND, Graphics::DirectComposition::*},
     core::{IUnknown, Interface},
@@ -27,7 +27,7 @@ pub struct VisualSurface {
 impl VisualSurface {
     /// `visual` must be a live `IDCompositionVisual`. The caller commits its DComp device
     /// after every `resize`, because wgpu only calls `SetContent`.
-    pub fn new(visual: *mut c_void, model: &Model, textures: &Path) -> Result<Self> {
+    pub fn new(visual: *mut c_void, scene: &Scene) -> Result<Self> {
         // CompositionVisual targets only exist on the DX12 backend.
         let instance = Gpu::instance(wgpu::Backends::DX12);
         let surface = unsafe { instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual)) }
@@ -50,7 +50,7 @@ impl VisualSurface {
         config.present_mode = present_mode;
         // Force the first `resize` to configure.
         (config.width, config.height) = (0, 0);
-        let renderer = Renderer::new(&gpu.device, &gpu.queue, format, model, textures);
+        let renderer = Renderer::new(&gpu.device, &gpu.queue, format, scene);
         Ok(Self { gpu, renderer, surface, config })
     }
 
@@ -107,7 +107,7 @@ pub struct TopmostLayer {
 }
 
 impl TopmostLayer {
-    pub fn new(hwnd: isize, model: &Model, textures: &Path) -> Result<Self> {
+    pub fn new(hwnd: isize, scene: &Scene) -> Result<Self> {
         unsafe {
             let device: IDCompositionDevice =
                 DCompositionCreateDevice2(None::<&IUnknown>).context("DCompositionCreateDevice2")?;
@@ -117,7 +117,7 @@ impl TopmostLayer {
                 .context("CreateTargetForHwnd(topmost = true)")?;
             let visual = device.CreateVisual()?;
             target.SetRoot(&visual)?;
-            let surface = VisualSurface::new(visual.as_raw(), model, textures)?;
+            let surface = VisualSurface::new(visual.as_raw(), scene)?;
             Ok(Self { device, _target: target, visual, surface, rect: Rect::default(), visible: true })
         }
     }
@@ -159,11 +159,11 @@ pub struct Readback {
 }
 
 impl Readback {
-    pub fn new(model: &Model, textures: &Path) -> Result<Self> {
+    pub fn new(scene: &Scene) -> Result<Self> {
         let gpu = Gpu::new(Gpu::instance(wgpu::Backends::DX12), None)?;
         eprintln!("[readback] adapter={}", gpu.adapter.get_info().name);
         // GPUI's RenderImage is BGRA.
-        let renderer = Renderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Bgra8UnormSrgb, model, textures);
+        let renderer = Renderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Bgra8UnormSrgb, scene);
         Ok(Self { gpu, renderer, target: None })
     }
 

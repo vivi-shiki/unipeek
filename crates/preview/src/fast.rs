@@ -3,8 +3,8 @@
 use crate::backend::{Rect, VisualSurface};
 use anyhow::{Context, Result, anyhow};
 use gpui_kit::{Bounds, DevicePixels, Window, WindowCompositionSurface, point, size};
-use unipeek::model::Model;
-use std::{path::Path, time::Instant};
+use unipeek::Scene;
+use std::time::Instant;
 use windows::core::{IUnknown, Interface};
 
 pub struct FastLayer {
@@ -14,7 +14,7 @@ pub struct FastLayer {
 }
 
 impl FastLayer {
-    pub fn new(window: &Window, model: &Model, textures: &Path) -> Result<Self> {
+    pub fn new(window: &Window, scene: &Scene) -> Result<Self> {
         let t = Instant::now();
         let composition = window.enable_window_composition().context("enable_window_composition")?;
         let attachment = composition.create_native_surface().context("create_native_surface")?;
@@ -23,7 +23,7 @@ impl FastLayer {
             .platform_handle()?
             .downcast::<IUnknown>()
             .map_err(|_| anyhow!("platform handle is not an IUnknown (windows crate version mismatch?)"))?;
-        let surface = VisualSurface::new(visual.as_raw(), model, textures)?;
+        let surface = VisualSurface::new(visual.as_raw(), scene)?;
         eprintln!("[fast] composition surface + renderer ready in {:?}", t.elapsed());
         Ok(Self { attachment, surface, rect: Rect::default() })
     }

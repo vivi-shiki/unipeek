@@ -1,11 +1,16 @@
-//! Minimal forward renderer: opaque parts, then alpha-blended parts. MSAA 4x.
+//! Forward renderer for a `Scene`: opaque and cutout parts, then inverted-hull outlines, then
+//! alpha-blended parts. One pipeline per (pass, cull mode); MSAA 4x.
 use crate::{
     camera::Orbit,
-    model::{Model, Vertex},
-    texture,
+    model::Vertex,
+    scene::Scene,
 };
 use bytemuck::{Pod, Zeroable};
-use std::path::Path;
+use std::collections::BTreeMap;
+use unipeek_unity::{
+    material::{Cull, Look},
+    shader::RenderMode,
+};
 use wgpu::util::DeviceExt;
 
 const SAMPLES: u32 = 4;
@@ -19,16 +24,33 @@ struct Globals {
     light: [f32; 4],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct MaterialUniform {
+    color: [f32; 4],
+    shadow: [f32; 4],
+    /// cutoff, mode (0 opaque, 1 cutout, 2 transparent), outline width, unused
+    params: [f32; 4],
+    outline: [f32; 4],
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Pass {
+    Solid,
+    Outline,
+    Blend,
+}
+
 struct Draw {
     first: u32,
     count: u32,
     bind: usize,
-    blend: bool,
+    pass: Pass,
+    cull: Option<wgpu::Face>,
 }
 
 pub struct Renderer {
-    opaque: wgpu::RenderPipeline,
-    blend: wgpu::RenderPipeline,
+    pipelines: BTreeMap<(Pass, u8), wgpu::RenderPipeline>,
     globals: wgpu::Buffer,
     globals_bind: wgpu::BindGroup,
     vbuf: wgpu::Buffer,
@@ -39,14 +61,24 @@ pub struct Renderer {
     pub clear: wgpu::Color,
 }
 
+fn cull_key(c: Option<wgpu::Face>) -> u8 {
+    match c {
+        None => 0,
+        Some(wgpu::Face::Back) => 1,
+        Some(wgpu::Face::Front) => 2,
+    }
+}
+
+fn face(c: Cull) -> Option<wgpu::Face> {
+    match c {
+        Cull::Off => None,
+        Cull::Back => Some(wgpu::Face::Back),
+        Cull::Front => Some(wgpu::Face::Front),
+    }
+}
+
 impl Renderer {
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
-        model: &Model,
-        texture_dir: &Path,
-    ) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat, scene: &Scene) -> Self {
         let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
@@ -54,20 +86,14 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let g_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let t_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let uniform_entry = |binding, visibility| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        };
+        let g_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT)] });
+        let m_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[
                 wgpu::BindGroupLayoutEntry {
@@ -86,6 +112,7 @@ impl Renderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                uniform_entry(2, wgpu::ShaderStages::VERTEX_FRAGMENT),
             ],
         });
         let globals_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -95,59 +122,13 @@ impl Renderer {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[Some(&g_layout), Some(&t_layout)],
+            bind_group_layouts: &[Some(&g_layout), Some(&m_layout)],
             immediate_size: 0,
         });
-        let pipeline = |blend: bool| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs"),
-                    compilation_options: Default::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: size_of::<Vertex>() as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
-                    })],
-                },
-                primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH,
-                    depth_write_enabled: Some(!blend),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: SAMPLES,
-                    mask: !0,
-                    alpha_to_coverage_enabled: !blend,
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: Some(if blend {
-                            wgpu::BlendState::ALPHA_BLENDING
-                        } else {
-                            wgpu::BlendState::REPLACE
-                        }),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let (opaque, blend) = (pipeline(false), pipeline(true));
 
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("vertices"),
-            contents: bytemuck::cast_slice(&model.vertices),
+            contents: if scene.vertices.is_empty() { &[0u8; size_of::<Vertex>()] } else { bytemuck::cast_slice(&scene.vertices) },
             usage: wgpu::BufferUsages::VERTEX,
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -159,78 +140,92 @@ impl Renderer {
             anisotropy_clamp: 8,
             ..Default::default()
         });
+        let white = vec![image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 255, 255, 255]))];
+        let binds: Vec<wgpu::BindGroup> = scene
+            .materials
+            .iter()
+            .map(|m| {
+                let mips = m.texture.as_deref().unwrap_or(&white);
+                let view = upload(device, queue, &m.name, mips);
+                let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("material"),
+                    contents: bytemuck::bytes_of(&material_uniform(&m.look)),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &m_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                        wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
+                    ],
+                })
+            })
+            .collect();
 
-        // One texture per distinct material; light grey fallback when nothing matches.
-        let mut names: Vec<String> = Vec::new();
-        let mut binds = Vec::new();
         let mut draws = Vec::new();
-        for part in &model.parts {
-            let bind = match names.iter().position(|n| n == &part.material) {
-                Some(i) => i,
-                None => {
-                    let mips = texture::guess_texture(texture_dir, &part.material)
-                        .and_then(|p| texture::load_mips(&p).map_err(|e| eprintln!("texture {p:?}: {e}")).ok())
-                        .unwrap_or_else(|| {
-                            eprintln!("no texture for material {:?}, using grey", part.material);
-                            vec![image::RgbaImage::from_pixel(4, 4, image::Rgba([230, 230, 230, 255]))]
-                        });
-                    let tex = device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some(&part.material),
-                        size: wgpu::Extent3d {
-                            width: mips[0].width(),
-                            height: mips[0].height(),
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: mips.len() as u32,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
-                    for (level, mip) in mips.iter().enumerate() {
-                        queue.write_texture(
-                            wgpu::TexelCopyTextureInfo {
-                                texture: &tex,
-                                mip_level: level as u32,
-                                origin: wgpu::Origin3d::ZERO,
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            mip,
-                            wgpu::TexelCopyBufferLayout {
-                                offset: 0,
-                                bytes_per_row: Some(4 * mip.width()),
-                                rows_per_image: None,
-                            },
-                            wgpu::Extent3d { width: mip.width(), height: mip.height(), depth_or_array_layers: 1 },
-                        );
-                    }
-                    binds.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: None,
-                        layout: &t_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&tex.create_view(&Default::default())),
-                            },
-                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
-                        ],
-                    }));
-                    names.push(part.material.clone());
-                    names.len() - 1
-                }
-            };
-            draws.push(Draw {
-                first: part.first,
-                count: part.count,
-                bind,
-                blend: part.material.to_lowercase().contains("alpha"),
+        for part in &scene.parts {
+            let look = &scene.materials[part.material].look;
+            if look.draw_surface {
+                let pass = if look.mode == RenderMode::Transparent { Pass::Blend } else { Pass::Solid };
+                draws.push(Draw { first: part.first, count: part.count, bind: part.material, pass, cull: face(look.cull) });
+            }
+            if look.outline.is_some() {
+                // Inverted hull: draw the extruded back faces only.
+                draws.push(Draw { first: part.first, count: part.count, bind: part.material, pass: Pass::Outline, cull: Some(wgpu::Face::Front) });
+            }
+        }
+        draws.sort_by_key(|d| d.pass);
+
+        let mut pipelines = BTreeMap::new();
+        for d in &draws {
+            let key = (d.pass, cull_key(d.cull));
+            if pipelines.contains_key(&key) {
+                continue;
+            }
+            let blend = d.pass == Pass::Blend;
+            let (vs, fs) = if d.pass == Pass::Outline { ("vs_outline", "fs_outline") } else { ("vs", "fs") };
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some(vs),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: size_of::<Vertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
+                    })],
+                },
+                primitive: wgpu::PrimitiveState { cull_mode: d.cull, ..Default::default() },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH,
+                    depth_write_enabled: Some(!blend),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(fs),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(if blend { wgpu::BlendState::ALPHA_BLENDING } else { wgpu::BlendState::REPLACE }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
             });
+            pipelines.insert(key, pipeline);
         }
 
         Renderer {
-            opaque,
-            blend,
+            pipelines,
             globals,
             globals_bind,
             vbuf,
@@ -309,12 +304,43 @@ impl Renderer {
         });
         pass.set_bind_group(0, &self.globals_bind, &[]);
         pass.set_vertex_buffer(0, self.vbuf.slice(..));
-        for blend in [false, true] {
-            pass.set_pipeline(if blend { &self.blend } else { &self.opaque });
-            for d in self.draws.iter().filter(|d| d.blend == blend) {
-                pass.set_bind_group(1, &self.binds[d.bind], &[]);
-                pass.draw(d.first..d.first + d.count, 0..1);
-            }
+        for d in &self.draws {
+            pass.set_pipeline(&self.pipelines[&(d.pass, cull_key(d.cull))]);
+            pass.set_bind_group(1, &self.binds[d.bind], &[]);
+            pass.draw(d.first..d.first + d.count, 0..1);
         }
     }
+}
+
+fn material_uniform(look: &Look) -> MaterialUniform {
+    let mode = match look.mode {
+        RenderMode::Opaque => 0.0,
+        RenderMode::Cutout => 1.0,
+        RenderMode::Transparent => 2.0,
+    };
+    let (width, outline) = look.outline.map_or((0.0, [0.0; 4]), |o| (o.width, o.color));
+    let [r, g, b] = look.shadow_color;
+    MaterialUniform { color: look.color, shadow: [r, g, b, 1.0], params: [look.cutoff, mode, width, 0.0], outline }
+}
+
+fn upload(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, mips: &[image::RgbaImage]) -> wgpu::TextureView {
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d { width: mips[0].width(), height: mips[0].height(), depth_or_array_layers: 1 },
+        mip_level_count: mips.len() as u32,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (level, mip) in mips.iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: level as u32, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            mip,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * mip.width()), rows_per_image: None },
+            wgpu::Extent3d { width: mip.width(), height: mip.height(), depth_or_array_layers: 1 },
+        );
+    }
+    tex.create_view(&Default::default())
 }

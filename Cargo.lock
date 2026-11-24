@@ -7055,6 +7055,8 @@ dependencies = [
  "glam",
  "image",
  "pollster",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "ufbx",
  "unipeek-unity",

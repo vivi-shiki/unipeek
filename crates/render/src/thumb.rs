@@ -1,5 +1,5 @@
 //! Headless thumbnails: render a scene offscreen and read the pixels back.
-use crate::{Result, Scene, gpu::Gpu};
+use crate::{Error, Result, Scene, camera::Orbit, gpu::Gpu, renderer::Renderer};
 
 /// Bump whenever rendered pixels change, so callers' thumbnail caches are rebuilt.
 pub const RENDERER_VERSION: u32 = 1;
@@ -12,16 +12,39 @@ pub enum View {
     ThreeQuarter,
 }
 
+impl View {
+    /// Camera yaw and pitch in radians. Yaw 0 looks at the model's front (+Z).
+    fn angles(self) -> (f32, f32) {
+        match self {
+            View::Front => (0.0, 0.05),
+            View::Side => (std::f32::consts::FRAC_PI_2, 0.05),
+            View::Back => (std::f32::consts::PI, 0.05),
+            View::ThreeQuarter => (0.6, 0.12),
+        }
+    }
+}
+
 impl std::fmt::Display for View {
-    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            View::Front => "front",
+            View::Side => "side",
+            View::Back => "back",
+            View::ThreeQuarter => "3q",
+        })
     }
 }
 
 impl std::str::FromStr for View {
     type Err = String;
-    fn from_str(_s: &str) -> std::result::Result<View, String> {
-        todo!()
+    fn from_str(s: &str) -> std::result::Result<View, String> {
+        Ok(match s {
+            "front" => View::Front,
+            "side" => View::Side,
+            "back" => View::Back,
+            "3q" => View::ThreeQuarter,
+            other => return Err(format!("unknown view {other:?}, expected front, side, back or 3q")),
+        })
     }
 }
 
@@ -51,17 +74,76 @@ pub enum ImageFormat {
 }
 
 impl ImageFormat {
-    pub fn from_path(_path: impl AsRef<std::path::Path>) -> Option<ImageFormat> {
-        todo!()
+    pub fn from_path(path: impl AsRef<std::path::Path>) -> Option<ImageFormat> {
+        match path.as_ref().extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "png" => Some(ImageFormat::Png),
+            "webp" => Some(ImageFormat::Webp),
+            _ => None,
+        }
     }
 }
 
 /// Render `scene` into a square RGBA image (straight alpha, sRGB).
-pub fn render_thumbnail(_gpu: &Gpu, _scene: &Scene, _opts: &ThumbOptions) -> Result<image::RgbaImage> {
-    todo!()
+pub fn render_thumbnail(gpu: &Gpu, scene: &Scene, opts: &ThumbOptions) -> Result<image::RgbaImage> {
+    if scene.is_empty() {
+        return Err(Error::NothingToShow(scene.report.input.clone()));
+    }
+    let size = opts.size.clamp(1, 8192);
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let mut renderer = Renderer::new(&gpu.device, &gpu.queue, format, scene);
+    renderer.clear = match opts.background {
+        Background::Transparent => wgpu::Color::TRANSPARENT,
+        Background::Color([r, g, b, a]) => {
+            let lin = |c: u8| srgb_to_linear(c as f64 / 255.0);
+            wgpu::Color { r: lin(r), g: lin(g), b: lin(b), a: a as f64 / 255.0 }
+        }
+    };
+    let mut camera = Orbit::fit(scene.min, scene.max);
+    (camera.yaw, camera.pitch) = opts.view.angles();
+    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("thumbnail"),
+        size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&Default::default());
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    renderer.render(&gpu.device, &gpu.queue, &mut enc, &view, size, size, &camera);
+    gpu.queue.submit([enc.finish()]);
+    let mut pixels = gpu.read_texture(&target, size, size)?;
+    if opts.background == Background::Transparent {
+        unpremultiply(&mut pixels);
+    }
+    image::RgbaImage::from_raw(size, size, pixels).ok_or_else(|| Error::Gpu("readback size mismatch".into()))
+}
+
+/// Edges resolved against a transparent black background come out premultiplied.
+fn unpremultiply(pixels: &mut [u8]) {
+    for p in pixels.chunks_exact_mut(4) {
+        let a = p[3] as u32;
+        if a > 0 && a < 255 {
+            for c in &mut p[..3] {
+                *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
+}
+
+fn srgb_to_linear(c: f64) -> f64 {
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
 }
 
 /// Lossless PNG or WebP.
-pub fn encode(_img: &image::RgbaImage, _format: ImageFormat) -> Result<Vec<u8>> {
-    todo!()
+pub fn encode(img: &image::RgbaImage, format: ImageFormat) -> Result<Vec<u8>> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    let f = match format {
+        ImageFormat::Png => image::ImageFormat::Png,
+        ImageFormat::Webp => image::ImageFormat::WebP,
+    };
+    img.write_to(&mut out, f).map_err(|e| Error::Image(e.to_string()))?;
+    Ok(out.into_inner())
 }
