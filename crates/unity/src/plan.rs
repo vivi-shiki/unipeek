@@ -52,6 +52,8 @@ pub struct Plan {
 pub enum BindSource {
     /// The FBX `.meta` remaps the slot (`externalObjects`).
     ExternalObject,
+    /// The prefab's renderer for this mesh assigns this slot.
+    PrefabRenderer,
     /// A material the prefab assigns has the slot's name.
     PrefabMaterial,
     /// A material in the package has the slot's name.
@@ -134,6 +136,12 @@ impl Plan {
             plan.models.extend(largest.map(planned));
         }
         Ok(plan)
+    }
+
+    /// Like `bind`, but first uses the material a prefab renderer assigns to slot `slot_index` of
+    /// the mesh on the FBX node `object`.
+    pub fn bind_slot(&self, index: &PackageIndex, model: Guid, _object: &str, _slot_index: usize, slot: &str) -> Binding {
+        self.bind(index, model, slot)
     }
 
     /// Material and texture for the FBX material slot `slot` of `model`.

@@ -190,3 +190,39 @@ fn bind_falls_back_to_texture_names_then_white() {
     assert!(none.main_texture.is_none() && none.material.is_none());
     assert_eq!(none.look, Look::white());
 }
+
+#[test]
+fn renderer_slots_bind_by_object_and_index() {
+    let pc01 = "51a2d3220584fc74dbf60acfa0885301";
+    let idx = index(
+        PackageBuilder::new()
+            .asset_with_meta(MODEL, "Assets/S/FBX/Body.fbx", fbx(100), model_meta(MODEL, &[]))
+            .asset(pc01, "Assets/S/MAT/PC01.mat", material_yaml("PC01", LIL_O, 4800000, Some(BODY_TEX), -1))
+            .asset(BODY_TEX, "Assets/S/TEX/Body.png", PNG_MAGIC.to_vec())
+            .asset(PREFAB, "Assets/S/Body.prefab", prefab_with_renderer("Body", MODEL, &[pc01])),
+    );
+    let plan = Plan::new(&idx, None).unwrap();
+    let b = plan.bind_slot(&idx, g(MODEL), "Body", 0, "Body_PC_Mat");
+    assert_eq!(b.source, BindSource::PrefabRenderer);
+    assert_eq!(b.material, Some(g(pc01)));
+    assert_eq!(b.main_texture.unwrap().guid, g(BODY_TEX));
+    let only = plan.bind_slot(&idx, g(MODEL), "Armature_Body", 0, "Body_PC_Mat");
+    assert_eq!(only.source, BindSource::PrefabRenderer, "the only renderer of a model is used even if names differ");
+    let past_end = plan.bind_slot(&idx, g(MODEL), "Body", 3, "PC01");
+    assert_eq!(past_end.source, BindSource::PrefabMaterial, "slots past the renderer's list fall back to names");
+}
+
+#[test]
+fn texture_name_fallback_skips_empty_slots_and_normal_maps() {
+    let normal_meta = format!("fileFormatVersion: 2\nguid: {HAIR_TEX}\nTextureImporter:\n  textureType: 1\n");
+    let idx = index(
+        PackageBuilder::new()
+            .asset(MODEL, "Assets/A/M.fbx", fbx(10))
+            .asset_with_meta(HAIR_TEX, "Assets/A/Tex/Skin.png", PNG_MAGIC.to_vec(), normal_meta)
+            .asset(BODY_TEX, "Assets/A/Tex/Cloth_Normal_OpenGL.png", PNG_MAGIC.to_vec()),
+    );
+    let plan = Plan::new(&idx, None).unwrap();
+    assert_eq!(plan.bind(&idx, g(MODEL), "").source, BindSource::Unbound, "an empty slot name matches nothing");
+    assert_eq!(plan.bind(&idx, g(MODEL), "Skin").source, BindSource::Unbound, "normal maps (textureType 1) are not main textures");
+    assert_eq!(plan.bind(&idx, g(MODEL), "OpenGL").source, BindSource::Unbound, "nor are files named like normal maps");
+}
