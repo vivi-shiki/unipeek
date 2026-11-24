@@ -2,7 +2,7 @@
 
 结论：本库是**懂 Unity 资产包的预览库**，给资产管理器调用，不是又一个通用 3D 查看器。Snowcase 是第一个用户；库放在独立仓库，发布到 crates.io，许可 MIT OR Apache-2.0。
 
-状态：需求稿，2026-11-23。标 ★ 的是第一版要做的。来源是 Snowcase-docs 的 [RENDER_REQUIREMENTS](https://github.com/Map1en/Snowcase-docs) 和 RENDER_PLUGIN，以及 [开源实现调研](PRIOR_ART.md)。
+状态：需求稿，2026-11-23。标 ★ 的是第一版要做的。来源是 Snowcase-docs 的 [RENDER_REQUIREMENTS](https://github.com/Map1en/Snowcase-docs)（由 RENDER_PLUGIN 改写而来），以及 [开源实现调研](PRIOR_ART.md)。
 
 ## 定位
 
@@ -48,12 +48,13 @@
 
 | 输出 | 格式 | 阶段 |
 |---|---|---|
-| 缩略图 | 512×512，透明背景，WebP 或 PNG；尺寸、视角可选 | ★ |
-| 交互视口 `Viewport` | 画到调用方给的 DComp visual 或窗口；相机和输入事件由调用方传入；读回静态帧兜底 | ★ |
+| 缩略图 | 512×512，透明背景，WebP 或 PNG；尺寸、视角可选；不给包内路径时自动选主 prefab | ★ |
+| 交互视口 `Viewport` | 第一版只做 `Viewport::offscreen`：离屏渲染后读回 BGRA；相机和输入事件由调用方传入（M0 决定，见 [INTEGRATION](INTEGRATION.md#接入决定m02026-11-24)） | ★ |
+| 零拷贝视口 | 画到调用方给的 DComp visual 或窗口，给以后的全屏查看用 | 后做 |
 | 信息报告 | Rust 结构体，`--json` 输出 JSON：三角形、骨骼、BlendShape、材质、shader、贴图尺寸、缺失 GUID | ★ |
 | 降级原因 | 报告里的列表，例如「缺素体」「shader 未识别」「PSD 读不了」 | ★ |
 | 退出码 | 区分 成功 / 降级成功 / 不支持 / 出错 | ★ |
-| 转台帧 | 12–24 帧 PNG / WebP | P1 |
+| 转台帧 | 12–24 帧 PNG / WebP；首个发布不做（M0 决定），靠缩略图的 `view` 参数循环实现 | 后做 |
 | 骨骼映射 | 骨骼名到 Humanoid 的对应，只给数据 | 未排期 |
 | 多视角小图 | 224² / 384²，给以图搜图用 | P5 |
 
@@ -99,7 +100,7 @@
 |---|---|
 | 仓库 | 独立仓库，不放进 Snowcase workspace，不受 Snowcase 的 CLA 约束 |
 | 许可 | MIT OR Apache-2.0（见 Snowcase-docs DECISIONS 2026-11-21） |
-| crate | 拆成不依赖 GPU 的解析层 `unipeek-unity` 和渲染层 `unipeek`（feature `cli`、`7z` 等），对齐 Snowcase-docs 里 `formats` 复用解析 crate 的决定，见 [INTEGRATION](INTEGRATION.md#依赖关系) |
+| crate | 同一仓库里两个 crate：不依赖 GPU 的解析层 `unipeek-unity`，和依赖它、重新导出它的渲染层 `unipeek`（feature `cli`、`7z` 等）。Snowcase `formats` 依赖前者，`app` 依赖后者。M0 决定，见 [INTEGRATION](INTEGRATION.md#接入决定m02026-11-24) |
 | 名字 | `unipeek`（Unity + peek）。2026-11-23 查过：crates.io 上 `unipeek` 和相近名字都没人用；GitHub 上只有一个无关的空 CSS 仓库同名。原工作名 `snowcase-render` 不再使用 |
 | 版本 | 接口稳定、能出缩略图后发 0.1 |
 | 注意 | ufbx 是 C 库，用户机器需要 C 编译器 |

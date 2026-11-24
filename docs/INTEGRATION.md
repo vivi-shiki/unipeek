@@ -11,7 +11,19 @@
 3. **库不依赖 GPUI。** GPUI 版本由 Snowcase 锁定（gpui-kit 0.9.1 → gpui-pre 0.3.12 ✓），我们只出 RGBA 帧和「画到某个 DComp visual / HWND」的接口，GPUI 胶水代码写在 Snowcase 的 `app` 里。
 4. **crate 要拆成「解析」和「渲染」两层，和 Snowcase-docs 已定的方案对齐。** RENDER_REQUIREMENTS 已经定了 Snowcase 的 `formats` 会依赖渲染库里「只管解析、不依赖 GPU 的那两个 crate」✓，这和我们 REQUIREMENTS 里「先发一个 crate 用 feature 开关」冲突，以对方为准。
 5. **`Resolver` 要按批、按包设计。** Snowcase 的 `cache.db` 已有 GUID → 包的索引，但不存条目内容 ✓；`.unitypackage` 是 tar.gz，没法随机读，按 GUID 一个个取字节会把同一个包重读很多遍 ～。
-6. **先开 issue，再动 Snowcase 的代码。** CONTRIBUTING 要求超过小修的改动先开 issue 达成一致，并明说现阶段要慎重提交改源码的 PR ✓；Vivi 往 Snowcase 仓库提交代码要签 CLA ✓，本库自己的仓库不受 CLA 约束。
+6. **Snowcase 直接把本库当外部依赖调用，接入代码由 Map1en 写。** 本库的交付物是公开 API 和版本号；不往 Snowcase 仓库开 issue、提 PR，所以 CONTRIBUTING 的「先开 issue」和 CLA 都不涉及本库（2026-11-24 Vivi 确认）。下面「接入决定」里的几条是和 Map1en 约定的 API 边界。
+
+## 接入决定（M0，2026-11-24）
+
+Vivi 定下，需要告诉 Map1en。开发路线见 [ROADMAP](ROADMAP.md)。
+
+| # | 决定 | 理由 | 被否掉的做法 |
+|---|---|---|---|
+| 1 | **两个 crate，同一个仓库**：`unipeek-unity`（解析：unitypackage 索引、Unity YAML、prefab → `.mat` → 贴图、`Report`，不依赖 GPU）和 `unipeek`（渲染，依赖并重新导出 `unipeek-unity`）。Snowcase `formats` 依赖前者，`app` 依赖后者 | `formats` 不该被迫编译 wgpu 和 ufbx，CI 也没有 GPU；crate 越多，两边要同步的版本越多。以后真要细拆，可以在 `unipeek-unity` 里重新导出，不破坏调用方 | 一个 crate 用 feature 开关；按 Snowcase-docs 字面拆三个 |
+| 2 | **缩略图子进程是 Snowcase 自己的 exe**（`snowcase.exe --thumb-worker`），里面跑库函数 `unipeek::serve(stdin, stdout)` | 详情预览本来就要在主进程链接 wgpu 和 ufbx，单独发 exe 省不了什么；只发一个 exe，版本永远一致；驱动崩溃照样被隔离 | 单独发 `unipeek.exe` |
+| 3 | **交互预览第一版只给 `Viewport::offscreen` 读回**（BGRA，给 GPUI 的 `RenderImage`） | 460 px 抽屉读回约 1 ms ✓；不依赖 gpui-pre 内部细节，不怕 #66676 把 DComp target 改回 `topmost = true` | 第一版就做 DComp / 子 HWND 零拷贝（以后做全屏查看时再加，只是多一个构造函数） |
+| 4 | **缩略图：每个商品自动一张，单个 prefab 按需**。本库负责从一个包里自动选出「主 prefab」；Snowcase 只给可见商品排队，跟在「探查包」之后跑。包文件树里的 prefab 在用户点开或悬停时才渲，之前先用包里的 128 px `preview.png` | 封面优先级里 3D 排最后（WORKFLOWS：BOOTH 图 → 压缩包宣传图 → `preview.png` → 3D）✓，批量渲染全部 prefab 占机械硬盘和 GPU，收益低。对本库来说两种情况是同一个函数，只是多一个包内路径 | 后台批量渲染每个 prefab |
+| 5 | **首个发布不做转台帧** | 详情里已能交互旋转；缩略图的 `view` 和 `size` 参数设计好，以后转台帧就是循环调用，不改 API | 按 RENDER_REQUIREMENTS 列为 P1 |
 
 ## 对方现状
 
@@ -26,8 +38,8 @@
 | PR 模板 | What does this PR do / How to test / Screenshots | ✓ |
 | issue / PR | 目前一个都没有（`gh issue list`、`gh pr list` 都为空） | ✓ |
 | 活跃度 | 5 星；主仓库和文档仓库 2026-11-23 当天都有推送 | ✓ |
-| 文档 | Snowcase-docs 单独一个仓库；`master` 之外还有一个没合并的 `docs/3d-preview-research` 分支，里面是 3D_PREVIEW.md（2026-11-14） | ✓ |
-| 缺的文档 | PRIOR_ART 和 REQUIREMENTS 里引用的 RENDER_PLUGIN.md，在两个分支里都没找到 | ✓ |
+| 文档 | Snowcase-docs 单独一个仓库；`master` 之外还有一个 `docs/3d-preview-research` 分支，里面是 3D_PREVIEW.md（2026-11-14），对应的 PR #1 当天关闭、没合并、没有评论 | ✓ |
+| RENDER_PLUGIN.md | Vivi 2026-11-14 写的渲染库设计（`b5bce38`），11-15 被 `a5cf175` 改写成 RENDER_REQUIREMENTS.md，已进 `master`；原文只在 git 历史里 | ✓ |
 
 ### crate 和代码
 
@@ -71,7 +83,7 @@ gpui-pre-wgpu 大概是 Linux 后端，Windows 上 GPUI 走 D3D11，所以 Snowc
 | 错误信息和日志用英文；不引入 GPL 依赖 | DECISIONS | ✓ |
 | P1 首个发布要有「包文件树、缩略图、白模预览」 | ROADMAP | ✓ |
 
-3D_PREVIEW.md（未合并分支）里的「自建 topmost DComp」方案、缩略图缓存键（资产 blake3 + 材质集合 hash + 渲染器版本 + 视角）和 S0–S4 原型阶段，是 preview-lab 的出发点 ✓，但它没有进 `master`，对方是否还认可要在 issue 里确认 ～。
+3D_PREVIEW.md（未合并分支）里的「自建 topmost DComp」方案、缩略图缓存键（资产 blake3 + 材质集合 hash + 渲染器版本 + 视角）和 S0–S4 原型阶段，是 preview-lab 的出发点 ✓，但它的 PR 已关闭、没有进 `master`。M0 决定第一版只用读回（见「接入决定」第 3 条），所以不再依赖这份文档。
 
 ## 接入方式
 
@@ -112,7 +124,9 @@ Snowcase app      ──依赖──▶ unipeek              （缩略图任务�
 | **snowcase.exe 自己带 `--thumb-worker` 参数，以子进程方式启动自己**（建议） | 只发一个 exe；版本永远一致 | snowcase.exe 要链接 wgpu 和 ufbx |
 | 单独发一个 `unipeek.exe`，Snowcase 调它的 `serve` | Snowcase 主程序不链接渲染代码 | 安装包多一个文件，两个版本要对上 |
 
-不管哪种，子进程里跑的都是本库的 `serve` 循环，所以 `serve` 要做成库函数（`unipeek::serve(stdin, stdout)`），不只是 CLI 的一部分 ～。调度（只排可见项、可暂停、同盘不并发）是 Snowcase `core::library::jobs` 的事，我们只保证单个任务对一个包顺序读一遍。
+不管哪种，子进程里跑的都是本库的 `serve` 循环，所以 `serve` 要做成库函数（`unipeek::serve(stdin, stdout)`），不只是 CLI 的一部分 ～。调度（只排可见项、可暂停、同盘不并发）是 Snowcase 的事：按 CODE_STRUCTURE，启动子进程这类编排在 `app::library_store`，写结果在 `core::library::jobs`；缩略图要用包索引，适合做成「整理文件」「探查包」之后的第三段 ✓。我们只保证单个任务对一个包顺序读一遍。
+
+已定第一种（见「接入决定」第 2 条）。
 
 ### 详情页预览
 
@@ -126,12 +140,12 @@ Snowcase app      ──依赖──▶ unipeek              （缩略图任务�
 
 ## 谁改什么
 
-### Snowcase 那边（要 Map1en 同意）
+### Snowcase 那边（Map1en 写）
 
 | 改动 | 位置 | 阶段 |
 |---|---|---|
 | 加依赖 `unipeek`（缩略图、预览）和 `unipeek-unity`（以后给 `formats`） | workspace `Cargo.toml` | 接缩略图时 |
-| 缩略图任务：排队、调子进程、写 `thumbs/`、记索引 | `core::library::jobs`、`store::cache`（加一张表，`cache.db` 版本号 +1） | P1 |
+| 缩略图任务：排队、调子进程、写 `thumbs/`、记索引 | `app::library_store`（编排、子进程）、`core::library::jobs`、`store::cache`（加一张表，`cache.db` 版本号 +1） | P1 |
 | 网格封面优先用生成的缩略图，没有时退回 `preview.png` 和现在的封面顺序 | `app::library_view::grid` | P1 |
 | 详情抽屉加 3D 预览和报告 | `app::library_view::detail` 下新模块 | P1 |
 | 实现 `Resolver` | `core` 或 `app`，读 `cache.db` + `library.db` | P1 降级，P2 补全 |
@@ -154,19 +168,13 @@ Snowcase app      ──依赖──▶ unipeek              （缩略图任务�
 
 ## 先后顺序
 
-1. **在 Snowcase 开 issue**，贴本文的「接入方式」和「谁改什么」，确认三件事：crate 怎么拆、缩略图子进程用哪种做法、详情第一步用读回。顺便问 3D_PREVIEW 分支还算不算数、RENDER_PLUGIN.md 在哪。
-2. 本库拆 crate、做 `Source` 和 unitypackage 索引，出 `thumb` 命令行，在本机样本包上跑通。
-3. 发 0.1（或先给 git rev），在 Snowcase 接缩略图任务。这是 P1「缩略图」，收益最大，也不碰 GPUI。
-4. 详情抽屉接读回视口和报告。P1「白模预览」。
-5. `Resolver` 跨包补素体和 shader。P1 先降级，P2 补全。
-6. `formats` 换成 `unipeek-unity`。
-7. 有需要再做零拷贝大窗口。
+分成 M0–M6 七个里程碑，每步的详细需求、完成标准和对 Snowcase 的依赖见 [ROADMAP](ROADMAP.md)。
 
 ## 风险
 
 | 风险 | 影响 | 对策 |
 |---|---|---|
-| Snowcase 架构还在快速变化，CONTRIBUTING 明说大 PR 可能被拒 ✓ | 接入代码白写 | 先开 issue；GPUI 胶水尽量薄，主要逻辑留在本库 |
+| Snowcase 架构还在快速变化，CONTRIBUTING 明说大 PR 可能被拒 ✓ | 接入代码白写 | 接入代码由 Map1en 写，我们只保证 API；GPUI 胶水尽量薄，主要逻辑留在本库 |
 | 两边各有一份 unitypackage 解析，直到第 6 步 | 行为不一致（比如 `pathname` 只取首行、跳过非 GUID 目录，对方已经这样做 ✓） | 本库的测试覆盖对方现有的行为；第 6 步时两边一起跑测试 |
 | 不能抄对方的 GPL 代码 | 写重复代码 | 自己写，或请 Map1en 把相关文件另外授权 |
 | gpui-pre 升级把 DComp target 改回 `topmost = true`（#66676）✓ | 零拷贝方案失效 | 第一步只用读回；零拷贝启动时自检，失败退回读回 |

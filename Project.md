@@ -11,6 +11,8 @@ renders a toon-style approximation, and reports what it found and why it had to 
 The authoritative requirement list is `REPO-ROOT/docs/REQUIREMENTS.md` (Chinese).
 The integration contract with Snowcase is `REPO-ROOT/docs/INTEGRATION.md` (Chinese).
 The survey of related open-source projects is `REPO-ROOT/docs/PRIOR_ART.md` (Chinese).
+The milestones M0–M6 with detailed requirements are in `REPO-ROOT/docs/ROADMAP.md` (Chinese).
+How a host such as Snowcase calls the library is in `REPO-ROOT/docs/USAGE.md` (Chinese). Keep it in sync with the public API.
 When this section and those documents disagree, those documents win, and you should point out the conflict.
 
 Items marked with ★ are required for the first release. Everything else must not be started unless a task asks for it.
