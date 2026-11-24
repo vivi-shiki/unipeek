@@ -142,7 +142,7 @@ pub fn zip(entries: &[(&[u8], &[u8], bool)]) -> Vec<u8> {
         central.extend_from_slice(&0x02014b50u32.to_le_bytes());
         central.extend_from_slice(&20u16.to_le_bytes());
         common(&mut central);
-        central.extend_from_slice(&[0; 8]);
+        central.extend_from_slice(&[0; 6]);
         central.extend_from_slice(&0u32.to_le_bytes());
         central.extend_from_slice(&offset.to_le_bytes());
         central.extend_from_slice(name);
