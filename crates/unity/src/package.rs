@@ -84,6 +84,16 @@ impl Entry {
         self.pathname.as_deref()?.rsplit(['/', '\\']).next()
     }
 
+    /// A file outside a unitypackage, addressed by a GUID derived from its path.
+    pub(crate) fn loose(pathname: String, size: u64, kind: AssetKind, bytes: Option<Arc<[u8]>>) -> Entry {
+        let mut e = Entry::new(Guid::from_path(&pathname));
+        e.pathname = Some(pathname);
+        e.size = Some(size);
+        e.kind = kind;
+        e.bytes = bytes;
+        e
+    }
+
     fn new(guid: Guid) -> Entry {
         Entry {
             guid,
@@ -202,6 +212,10 @@ impl PackageIndex {
         }
         index.stats = ReadStats { passes: 1, bytes: counted.load(Ordering::Relaxed) };
         Ok(index)
+    }
+
+    pub(crate) fn from_loose(entries: Vec<Entry>) -> PackageIndex {
+        PackageIndex { entries: entries.into_iter().map(|e| (e.guid, e)).collect(), issues: Vec::new(), stats: ReadStats { passes: 1, bytes: 0 } }
     }
 
     fn truncated(&mut self, entries: u64, err: io::Error) -> Result<()> {

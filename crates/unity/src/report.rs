@@ -3,6 +3,7 @@ use crate::{
     PackageIndex, PackageIssue, Plan, ReadStats,
     load::Container,
     plan::{BindSource, Binding, MissingRef},
+    prefab::Usage,
     shader::{RenderMode, ShaderFamily},
 };
 
@@ -84,17 +85,85 @@ pub struct Report {
 }
 
 impl Report {
-    pub fn new(_input: String, _container: Container, _member: Option<String>, _index: &PackageIndex, _plan: &Plan) -> Report {
-        todo!()
+    pub fn new(input: String, container: Container, member: Option<String>, index: &PackageIndex, plan: &Plan) -> Report {
+        let mut r = Report {
+            input,
+            container,
+            member,
+            prefab: plan.prefab.as_ref().map(|c| c.path.clone()),
+            candidates: plan.candidates.iter().map(|c| c.path.clone()).collect(),
+            models: plan.models.iter().map(|m| ModelReport { path: m.path.clone(), ..Default::default() }).collect(),
+            materials: Vec::new(),
+            missing: plan.missing.clone(),
+            degrades: Vec::new(),
+            issues: index.issues.clone(),
+            read: index.stats,
+            status: Status::Ok,
+        };
+        if plan.models.is_empty() {
+            r.degrade(Degrade::NothingToShow);
+        }
+        for m in &plan.missing {
+            if matches!(m.usage, Usage::Prefab | Usage::Mesh) {
+                r.degrade(Degrade::MissingDependency { guid: m.guid, usage: m.usage });
+            }
+        }
+        if plan.material_overrides > 0 {
+            r.degrade(Degrade::MaterialOverridesIgnored { count: plan.material_overrides });
+        }
+        for issue in &index.issues {
+            if let PackageIssue::Truncated { message, .. } = issue {
+                r.degrade(Degrade::Truncated { message: message.clone() });
+            }
+        }
+        r
     }
 
     /// Record how one FBX material slot was bound, with the degrades it implies.
-    pub fn add_binding(&mut self, _model: &str, _slot: &str, _binding: &Binding) {
-        todo!()
+    pub fn add_binding(&mut self, model: &str, slot: &str, binding: &Binding) {
+        let material = binding.material_name.clone();
+        let label = material.clone().unwrap_or_else(|| slot.to_string());
+        if binding.source == BindSource::Unbound {
+            self.degrade(Degrade::MissingMaterial { model: model.to_string(), slot: slot.to_string() });
+        }
+        if let Some(shader) = &binding.shader
+            && shader.family == ShaderFamily::Unknown
+        {
+            self.degrade(Degrade::UnknownShader { material: label.clone(), shader: shader.name.clone() });
+        }
+        if let Some(tex) = &binding.main_texture
+            && !tex.in_package
+        {
+            self.degrade(Degrade::MissingTexture { material: label.clone(), guid: tex.guid });
+            let missing = MissingRef { guid: tex.guid, usage: Usage::Texture };
+            if !self.missing.contains(&missing) {
+                self.missing.push(missing);
+                self.missing.sort();
+            }
+        }
+        let entry = MaterialReport {
+            model: model.to_string(),
+            slot: slot.to_string(),
+            source: binding.source,
+            material,
+            shader: binding.shader.as_ref().and_then(|s| s.name.clone()),
+            family: binding.shader.as_ref().map(|s| s.family),
+            mode: binding.look.mode,
+            texture: binding.main_texture.as_ref().and_then(|t| t.path.clone()),
+            texture_size: None,
+        };
+        if !self.materials.iter().any(|m| m.model == entry.model && m.slot == entry.slot) {
+            self.materials.push(entry);
+        }
     }
 
-    pub fn degrade(&mut self, _d: Degrade) {
-        todo!()
+    pub fn degrade(&mut self, d: Degrade) {
+        if !self.degrades.contains(&d) {
+            self.degrades.push(d);
+        }
+        if self.status == Status::Ok {
+            self.status = Status::Degraded;
+        }
     }
 }
 

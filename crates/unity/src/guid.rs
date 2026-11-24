@@ -20,6 +20,15 @@ impl Guid {
     pub fn is_zero(&self) -> bool {
         self.0 == [0; 16]
     }
+
+    /// A stable stand-in GUID for a loose file (zip member, file in a folder), from its path.
+    pub(crate) fn from_path(path: &str) -> Guid {
+        let fnv = |seed: u64| path.bytes().fold(seed, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100000001b3));
+        let mut out = [0u8; 16];
+        out[..8].copy_from_slice(&fnv(0xcbf29ce484222325).to_be_bytes());
+        out[8..].copy_from_slice(&fnv(0x84222325cbf29ce4).to_be_bytes());
+        Guid(out)
+    }
 }
 
 impl fmt::Display for Guid {
