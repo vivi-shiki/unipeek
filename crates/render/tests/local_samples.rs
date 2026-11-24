@@ -18,6 +18,14 @@ use unipeek::{
     unity::{IndexOptions, Input, PackageIndex, Status},
 };
 
+/// The 3 GB test measures this process's memory, so it runs alone: it takes the write lock,
+/// every other test here a read lock.
+static EXCLUSIVE: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+fn shared() -> std::sync::RwLockReadGuard<'static, ()> {
+    EXCLUSIVE.read().unwrap_or_else(|e| e.into_inner())
+}
+
 fn samples(test: &str) -> Option<(PathBuf, Value)> {
     let Some(root) = std::env::var_os("UNIPEEK_SAMPLES").map(PathBuf::from) else {
         println!("skipped: {test}: UNIPEEK_SAMPLES is not set");
@@ -44,6 +52,7 @@ fn status_name(s: Status) -> &'static str {
 /// M1: every listed sample plans the same prefab, geometry, bindings and degrade reasons as recorded.
 #[test]
 fn reports_match_the_manifest() {
+    let _shared = shared();
     let Some((root, manifest)) = samples("reports_match_the_manifest") else { return };
     let mut failures = Vec::new();
     for s in manifest["samples"].as_array().unwrap() {
@@ -91,6 +100,7 @@ fn reports_match_the_manifest() {
 /// M1: path, bytes and one-shot reader inputs give the same report.
 #[test]
 fn sources_agree() {
+    let _shared = shared();
     let Some((root, manifest)) = samples("sources_agree") else { return };
     for s in manifest["samples"].as_array().unwrap().iter().filter(|s| s["path"].as_str().unwrap().ends_with(".unitypackage")).take(3) {
         let rel = s["path"].as_str().unwrap();
@@ -112,6 +122,7 @@ fn sources_agree() {
 /// M1: everything in the folder opens without an error; only listed formats are unsupported.
 #[test]
 fn every_input_opens() {
+    let _shared = shared();
     let Some((root, manifest)) = samples("every_input_opens") else { return };
     let unsupported: Vec<&str> = manifest["unsupported"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
     let mut seen = 0;
@@ -143,6 +154,7 @@ fn every_input_opens() {
 /// M2: every sample with geometry renders a thumbnail that is neither empty nor all background.
 #[test]
 fn thumbnails_render() {
+    let _shared = shared();
     let Some((root, manifest)) = samples("thumbnails_render") else { return };
     let Some(gpu) = common::gpu("thumbnails_render") else { return };
     let out = std::env::temp_dir().join(format!("unipeek-local-thumbs-{}", std::process::id()));
@@ -166,6 +178,7 @@ fn thumbnails_render() {
 /// M2: the serve loop handles every sample in one process without leaking a failure into the next.
 #[test]
 fn serve_runs_the_whole_set() {
+    let _shared = shared();
     let Some((root, manifest)) = samples("serve_runs_the_whole_set") else { return };
     if common::gpu("serve_runs_the_whole_set").is_none() {
         return;
@@ -198,6 +211,7 @@ fn big_package_streams() {
         println!("skipped: big_package_streams: UNIPEEK_BIG is not set");
         return;
     }
+    let _alone = EXCLUSIVE.write().unwrap_or_else(|e| e.into_inner());
     const PART: u64 = 1100 << 20;
     let (reader, writer) = std::io::pipe().unwrap();
     let producer = std::thread::spawn(move || {
@@ -221,11 +235,79 @@ fn big_package_streams() {
         tar.into_inner().unwrap().finish().unwrap().flush().unwrap();
     });
     let t = Instant::now();
+    let baseline = working_set();
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watcher = {
+        let done = done.clone();
+        std::thread::spawn(move || {
+            let mut peak = 0u64;
+            while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                peak = peak.max(working_set().unwrap_or(0));
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            peak
+        })
+    };
     let index = PackageIndex::read(std::io::BufReader::new(reader), &IndexOptions::default()).unwrap();
     producer.join().unwrap();
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
+    let peak = watcher.join().unwrap();
     assert_eq!(index.len(), 3);
     assert!(index.entries().all(|e| e.size == Some(PART) && e.bytes.is_none()), "big assets are measured, never kept");
-    println!("local: indexed {} GB in {:?}", 3 * PART >> 30, t.elapsed());
+    match baseline {
+        Some(base) => {
+            let grew = peak.saturating_sub(base) >> 20;
+            println!("local: indexed {} GB in {:?}, working set grew {grew} MB", 3 * PART >> 30, t.elapsed());
+            assert!(grew < 256, "memory must not follow package size: grew {grew} MB while streaming 3 GB");
+        }
+        None => println!("local: indexed {} GB in {:?} (memory not measured on this platform)", 3 * PART >> 30, t.elapsed()),
+    }
+}
+
+/// Current working set of this process in bytes (Windows only).
+fn working_set() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::{ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS}, Threading::GetCurrentProcess};
+        let mut c: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
+        c.cb = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        // SAFETY: the pseudo handle of the current process is always valid and `c` is sized for the call.
+        let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) };
+        (ok != 0).then_some(c.WorkingSetSize as u64)
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// M1 done criterion: material binding through prefabs, `.meta` and `.mat` finds at least as many
+/// textures as the lab's old rule (a PNG whose name ends with the FBX material name), listed per sample.
+#[test]
+fn bindings_beat_name_matching() {
+    let _shared = shared();
+    let Some((root, manifest)) = samples("bindings_beat_name_matching") else { return };
+    let (mut new_total, mut old_total, mut slots_total) = (0, 0, 0);
+    let mut table = vec!["| sample | slots | textured now | textured by name only |".to_string(), "|---|---|---|---|".to_string()];
+    for s in manifest["samples"].as_array().unwrap() {
+        let rel = s["path"].as_str().unwrap();
+        if !rel.ends_with(".unitypackage") {
+            continue;
+        }
+        let scene = Scene::load(Input::from_location(&location(&root, rel)), &LoadOptions::default()).unwrap();
+        let (pkg, _) = unipeek::unity::Package::open(Input::from_location(&location(&root, rel)), &IndexOptions::default()).unwrap();
+        let pngs: Vec<String> = pkg.index.entries().filter(|e| e.extension().as_deref() == Some("png")).filter_map(|e| e.stem().map(str::to_lowercase)).collect();
+        let slots = scene.report.materials.len();
+        let now = scene.report.materials.iter().filter(|m| m.texture.is_some()).count();
+        let old = scene.report.materials.iter().filter(|m| !m.slot.is_empty() && pngs.iter().any(|p| p.ends_with(&m.slot.to_lowercase()))).count();
+        table.push(format!("| {rel} | {slots} | {now} | {old} |"));
+        (new_total, old_total, slots_total) = (new_total + now, old_total + old, slots_total + slots);
+    }
+    table.push(format!("| total | {slots_total} | {new_total} | {old_total} |"));
+    for line in &table {
+        println!("local: {line}");
+    }
+    assert!(new_total >= old_total, "binding found {new_total} textures, name matching {old_total}");
 }
 
 trait TakeExact: std::io::Read + Sized {
