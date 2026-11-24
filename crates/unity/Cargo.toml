@@ -8,3 +8,13 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+thiserror.workspace = true
+serde.workspace = true
+tar.workspace = true
+flate2.workspace = true
+zip.workspace = true
+encoding_rs.workspace = true
+
+[features]
+# Builders for synthetic packages, used by the tests of this crate and of unipeek.
+testing = []
