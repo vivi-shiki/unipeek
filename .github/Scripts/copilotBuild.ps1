@@ -2,7 +2,7 @@
 #
 #   copilotBuild.ps1                       debug build of every crate, all targets (lib, bins, examples, tests)
 #   copilotBuild.ps1 -Release              release profile
-#   copilotBuild.ps1 -Package lab-render   one crate only
+#   copilotBuild.ps1 -Package unipeek   one crate only
 #   copilotBuild.ps1 -Fast                 build `preview` against gpui-fast, in target-fast
 
 param(

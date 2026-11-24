@@ -31,7 +31,7 @@ set M=<model folder>
 cargo run -p preview -- overlay  %M%\model.fbx %M%\textures 1100x800
 cargo run -p preview -- readback %M%\model.fbx %M%\textures 1100x800
 cargo run -p preview --features fast --target-dir target-fast -- fast %M%\model.fbx %M%\textures 1100x800
-cargo run --release -p lab-render --example thumb -- %M%\model.fbx %M%\textures out\front.png 1024 1024
+cargo run --release -p unipeek --example thumb -- %M%\model.fbx %M%\textures out\front.png 1024 1024
 ```
 
 Left drag rotates, middle drag pans, wheel zooms. `Popup test` cycles a GPUI panel over the viewport.

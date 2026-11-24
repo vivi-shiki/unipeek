@@ -11,7 +11,7 @@ mod backend;
 
 use backend::{Readback, Rect, TopmostLayer};
 use gpui_kit::{prelude::FluentBuilder, *};
-use lab_render::{camera::Orbit, model::Model};
+use unipeek::{camera::Orbit, model::Model};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{path::PathBuf, sync::Arc, time::Instant};
 

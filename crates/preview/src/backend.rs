@@ -1,6 +1,6 @@
 //! The presentation paths under test. Each one shows frames from the same `Renderer`.
 use anyhow::{Context, Result, bail};
-use lab_render::{camera::Orbit, gpu::Gpu, model::Model, renderer::Renderer, wgpu};
+use unipeek::{camera::Orbit, gpu::Gpu, model::Model, renderer::Renderer, wgpu};
 use std::{ffi::c_void, path::Path, time::Instant};
 use windows::{
     Win32::{Foundation::HWND, Graphics::DirectComposition::*},

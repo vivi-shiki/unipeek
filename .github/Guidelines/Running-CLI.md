@@ -12,11 +12,11 @@ cd WORKSPACE-ROOT
 & REPO-ROOT\.github\Scripts\copilotExecute.ps1 -Mode CLI -Executable CRATE-NAME -Arguments "info","INPUT","--json"
 ```
 
-An example of a library crate (today `thumb` and `dump` of `lab-render`):
+An example of a library crate (today `thumb` and `dump` of `unipeek`):
 
 ```
 cd WORKSPACE-ROOT
-& REPO-ROOT\.github\Scripts\copilotExecute.ps1 -Mode Example -Package lab-render -Executable thumb -Arguments "MODEL.fbx","TEXTURE-DIR","REPO-ROOT\out\front.png","1024","1024"
+& REPO-ROOT\.github\Scripts\copilotExecute.ps1 -Mode Example -Package unipeek -Executable thumb -Arguments "MODEL.fbx","TEXTURE-DIR","REPO-ROOT\out\front.png","1024","1024"
 ```
 
 - `-Mode` and `-Executable` are required. `-Package` is required with `-Mode Example`.

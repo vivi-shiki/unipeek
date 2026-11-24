@@ -3671,19 +3671,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lab-render"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytemuck",
- "glam",
- "image",
- "pollster",
- "ufbx",
- "wgpu",
-]
-
-[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5102,9 +5089,9 @@ dependencies = [
  "anyhow",
  "gpui-kit",
  "image",
- "lab-render",
  "raw-window-handle",
  "smallvec",
+ "unipeek",
  "windows 0.62.2",
 ]
 
@@ -7011,6 +6998,24 @@ name = "unicode-width"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
+
+[[package]]
+name = "unipeek"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "glam",
+ "image",
+ "pollster",
+ "ufbx",
+ "unipeek-unity",
+ "wgpu",
+]
+
+[[package]]
+name = "unipeek-unity"
+version = "0.1.0"
 
 [[package]]
 name = "untrusted"

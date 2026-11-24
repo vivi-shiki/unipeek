@@ -17,7 +17,7 @@ The following choices are preferred:
 
 [Learning of Coding Preference](./Learning.md)
 
-## lab-render
+## unipeek
 
 Folder: `REPO-ROOT/crates/render`
 
@@ -83,7 +83,7 @@ How a frame is produced from a `Model`.
 
 Folder: `REPO-ROOT/crates/preview`
 
-A GPUI application that compares three ways to show `lab-render` frames inside a GPUI window on Windows. It is research code and will never be published.
+A GPUI application that compares three ways to show `unipeek` frames inside a GPUI window on Windows. It is research code and will never be published.
 It is the evidence behind the "readback first, zero-copy later" decision in `REPO-ROOT/docs/INTEGRATION.md`.
 
 ### Design Explanation

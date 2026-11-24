@@ -5,7 +5,7 @@
 
 ## Executing copilotExecute.ps1
 
-`CRATE-NAME` is the name of the crate (the `name` in its `Cargo.toml`, e.g. `lab-render`), or `all` for the whole workspace.
+`CRATE-NAME` is the name of the crate (the `name` in its `Cargo.toml`, e.g. `unipeek`), or `all` for the whole workspace.
 
 Build first following `Building.md`, then run the tests:
 

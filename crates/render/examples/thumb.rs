@@ -1,5 +1,5 @@
 //! Headless: render the model to a PNG, and time render-only vs render+readback.
-use lab_render::{camera::Orbit, gpu::Gpu, model::Model, renderer::Renderer, wgpu};
+use unipeek::{camera::Orbit, gpu::Gpu, model::Model, renderer::Renderer, wgpu};
 use std::{path::Path, time::Instant};
 
 fn main() -> anyhow::Result<()> {

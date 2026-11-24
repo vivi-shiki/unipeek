@@ -1,0 +1,10 @@
+[package]
+name = "unipeek-unity"
+description = "Read Unity asset packages without a GPU: unitypackage index, Unity YAML, prefab and material binding."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]

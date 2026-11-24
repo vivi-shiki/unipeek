@@ -1,8 +1,8 @@
 # Run something in the Cargo workspace and save the result to Execute.log
 #
-#   copilotExecute.ps1 -Mode UnitTest -Executable lab-render [-Filter name] [-NoCapture]
+#   copilotExecute.ps1 -Mode UnitTest -Executable unipeek [-Filter name] [-NoCapture]
 #   copilotExecute.ps1 -Mode CLI      -Executable unipeek -Arguments "info","pkg.unitypackage","--json"
-#   copilotExecute.ps1 -Mode Example  -Executable thumb -Package lab-render -Arguments ...
+#   copilotExecute.ps1 -Mode Example  -Executable thumb -Package unipeek -Arguments ...
 #   copilotExecute.ps1 -Mode Preview  -Executable readback -Arguments model.fbx,textures,1100x800 [-Fast] [-Seconds 10]
 #
 # -Executable is a crate name for UnitTest and CLI, an example name for Example,

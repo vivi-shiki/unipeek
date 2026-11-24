@@ -77,12 +77,11 @@ therefore `WORKSPACE-ROOT` is `REPO-ROOT`.
 
 | Crate | Folder | Purpose | Published |
 |---|---|---|---|
-| `lab-render` | `REPO-ROOT/crates/render` | UI-agnostic loading and rendering. Will be split into `unipeek-unity` (parsing, no GPU) and `unipeek` (rendering). | Not yet |
+| `unipeek-unity` | `REPO-ROOT/crates/unity` | GPU-free parsing: unitypackage streaming index, Unity YAML, prefab → FBX `.meta` → `.mat` → texture binding, `Report`. MUST build and test without a GPU and without `wgpu`. | Yes |
+| `unipeek` | `REPO-ROOT/crates/render` | Rendering: wgpu renderer, ufbx loading, thumbnails, `serve`; re-exports `unipeek-unity`. Feature `cli` builds the `unipeek` command line. | Yes |
 | `preview` | `REPO-ROOT/crates/preview` | GPUI test application with three ways to put frames on screen: `overlay`, `fast`, `readback`. Research code, never published. | Never |
 
-Planned crates, follow `REPO-ROOT/docs/INTEGRATION.md` before creating them:
-- `unipeek-unity`: unitypackage streaming index, Unity YAML, prefab → FBX `.meta` → `.mat` → texture binding, `Report`. MUST build and test without a GPU.
-- `unipeek`: wgpu renderer, ufbx loading, thumbnails, `Viewport`; feature `cli` for the command line and `serve`.
+The split follows `REPO-ROOT/docs/INTEGRATION.md` (M0 decision 1): Snowcase `formats` depends on `unipeek-unity`, Snowcase `app` depends on `unipeek`.
 
 ## Files not Allowed to Modify
 
@@ -104,7 +103,7 @@ You are required to follow the guideline to run anything in this workspace,
 do not call `cargo` directly unless a guideline says so.
 
 - When any `*.rs`, `*.wgsl` or `Cargo.toml` file is changed, build the workspace and run the unit tests of the affected crates.
-- `unipeek-unity` (and today the parsing part of `lab-render`) must pass its tests on a machine without a GPU.
+- `unipeek-unity` must pass its tests on a machine without a GPU.
 - Tests that need a GPU adapter must skip with a printed message when `wgpu::Instance::request_adapter` returns nothing.
 - When any test case fails, you must fix the issue immediately, even if the error is unrelated to the issue you are working on.
 - The `preview` crate has no unit tests. It is verified by running it, see `REPO-ROOT/.github/Guidelines/Running-Preview.md`. Only run it when the task changes `crates/preview` or asks for a measurement.

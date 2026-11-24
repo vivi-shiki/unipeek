@@ -3,7 +3,7 @@
 use crate::backend::{Rect, VisualSurface};
 use anyhow::{Context, Result, anyhow};
 use gpui_kit::{Bounds, DevicePixels, Window, WindowCompositionSurface, point, size};
-use lab_render::model::Model;
+use unipeek::model::Model;
 use std::{path::Path, time::Instant};
 use windows::core::{IUnknown, Interface};
 
