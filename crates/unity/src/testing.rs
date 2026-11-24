@@ -114,5 +114,50 @@ pub fn prefab_with_renderer(name: &str, mesh_guid: &str, materials: &[&str]) -> 
     )
 }
 
+/// A stored (uncompressed) zip with raw member names. `utf8` sets the language-encoding flag;
+/// without it Japanese tools write Shift-JIS names.
+pub fn zip(entries: &[(&[u8], &[u8], bool)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut central = Vec::new();
+    for (name, data, utf8) in entries {
+        let mut crc = flate2::Crc::new();
+        crc.update(data);
+        let flags: u16 = if *utf8 { 0x0800 } else { 0 };
+        let offset = out.len() as u32;
+        let common = |v: &mut Vec<u8>| {
+            v.extend_from_slice(&20u16.to_le_bytes());
+            v.extend_from_slice(&flags.to_le_bytes());
+            v.extend_from_slice(&0u16.to_le_bytes());
+            v.extend_from_slice(&0u32.to_le_bytes());
+            v.extend_from_slice(&crc.sum().to_le_bytes());
+            v.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            v.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            v.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            v.extend_from_slice(&0u16.to_le_bytes());
+        };
+        out.extend_from_slice(&0x04034b50u32.to_le_bytes());
+        common(&mut out);
+        out.extend_from_slice(name);
+        out.extend_from_slice(data);
+        central.extend_from_slice(&0x02014b50u32.to_le_bytes());
+        central.extend_from_slice(&20u16.to_le_bytes());
+        common(&mut central);
+        central.extend_from_slice(&[0; 8]);
+        central.extend_from_slice(&0u32.to_le_bytes());
+        central.extend_from_slice(&offset.to_le_bytes());
+        central.extend_from_slice(name);
+    }
+    let start = out.len() as u32;
+    out.extend_from_slice(&central);
+    out.extend_from_slice(&0x06054b50u32.to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(central.len() as u32).to_le_bytes());
+    out.extend_from_slice(&start.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out
+}
+
 pub const FBX_BINARY_MAGIC: &[u8] = b"Kaydara FBX Binary  \x00\x1a\x00";
 pub const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";

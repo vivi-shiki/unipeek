@@ -7067,6 +7067,7 @@ dependencies = [
  "encoding_rs",
  "flate2",
  "serde",
+ "serde_json",
  "tar",
  "thiserror 2.0.21",
  "zip",
