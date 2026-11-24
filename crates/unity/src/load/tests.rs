@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     AssetKind, Plan, Source,
-    testing::{FBX_BINARY_MAGIC, PNG_MAGIC, PackageBuilder, model_meta, prefab_instancing, zip},
+    testing::{FBX_BINARY_MAGIC, PNG_MAGIC, PackageBuilder, model_meta, prefab_instancing, zip, zip_with_flags},
 };
 use std::{path::PathBuf, sync::Arc};
 
@@ -160,4 +160,19 @@ fn unsupported_and_missing_inputs() {
     assert!(matches!(err, crate::Error::Unsupported(_)), "{err}");
     let err = Package::open(Input::new(Source::Path("Z:/definitely/not/here.unitypackage".into())), &IndexOptions::default()).err().unwrap();
     assert!(matches!(err, crate::Error::Io(_) | crate::Error::NotFound(_)), "{err}");
+}
+
+#[test]
+fn nested_and_encrypted_zips_are_unsupported() {
+    let inner = zip(&[(b"a.fbx", &fbx(10), true)]);
+    let outer = zip(&[(b"Item/inner.zip", &inner, true)]);
+    let mut input = Input::from_location("x/Outer.zip#Item/inner.zip");
+    input.source = Source::Bytes(Arc::from(outer));
+    let err = Package::open(input, &IndexOptions::default()).err().unwrap();
+    assert!(matches!(err, crate::Error::Unsupported(_)), "{err}");
+
+    let locked = zip_with_flags(&[(b"Item/Avatar.unitypackage", &small_package(), 0x0001)]);
+    let err = Package::open(Input::new(Source::Bytes(Arc::from(locked))), &IndexOptions::default()).err().unwrap();
+    assert!(matches!(err, crate::Error::Unsupported(_)), "{err}");
+    assert!(err.to_string().to_lowercase().contains("password") || err.to_string().to_lowercase().contains("encrypt"), "{err}");
 }

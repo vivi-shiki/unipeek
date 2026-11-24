@@ -251,3 +251,37 @@ fn main_prefab_uses_the_largest_model_before_name_matches() {
     let plan = Plan::new(&idx, None).unwrap();
     assert_eq!(plan.prefab.unwrap().path, "Assets/Shop/Outfit_Black.prefab");
 }
+
+#[test]
+fn binary_materials_are_reported_unreadable() {
+    let binary_mat: Vec<u8> = [&[0u8, 0, 0, 0, 0, 0, 0x10, 0, 0, 0, 0, 0x16][..], &[0x42; 64]].concat();
+    let idx = index(
+        PackageBuilder::new()
+            .asset_with_meta(MODEL, "Assets/A/M.fbx", fbx(10), model_meta(MODEL, &[("Body", BODY_MAT)]))
+            .asset(BODY_MAT, "Assets/A/Body.mat", binary_mat),
+    );
+    let plan = Plan::new(&idx, None).unwrap();
+    let b = plan.bind(&idx, g(MODEL), "Body");
+    assert_eq!(b.material, Some(g(BODY_MAT)));
+    assert!(b.unreadable.as_deref().is_some_and(|r| r.contains("binary")), "{:?}", b.unreadable);
+    assert_eq!(b.look, Look::white());
+}
+
+#[test]
+fn nested_prefabs_stop_at_32_levels() {
+    let guids: Vec<String> = (0..40).map(|i| format!("{:032x}", 0xabc0_0000u64 + i)).collect();
+    let chain = |len: usize| {
+        let mut b = PackageBuilder::new().asset(MODEL, "Assets/A/M.fbx", fbx(10));
+        for i in 0..len {
+            let next = if i + 1 == len { MODEL.to_string() } else { guids[i + 1].clone() };
+            b = b.asset(&guids[i], &format!("Assets/A/P{i:02}.prefab"), prefab_instancing(&next, &[]));
+        }
+        index(b)
+    };
+    let short = chain(10);
+    let plan = Plan::new(&short, Some("Assets/A/P00.prefab")).unwrap();
+    assert_eq!(plan.models.len(), 1, "a 10-level chain reaches the model");
+    let long = chain(40);
+    let plan = Plan::new(&long, Some("Assets/A/P00.prefab")).unwrap();
+    assert!(plan.models.is_empty(), "the walk stops after 32 nested prefabs");
+}

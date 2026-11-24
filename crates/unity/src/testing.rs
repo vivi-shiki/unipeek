@@ -117,12 +117,17 @@ pub fn prefab_with_renderer(name: &str, mesh_guid: &str, materials: &[&str]) -> 
 /// A stored (uncompressed) zip with raw member names. `utf8` sets the language-encoding flag;
 /// without it Japanese tools write Shift-JIS names.
 pub fn zip(entries: &[(&[u8], &[u8], bool)]) -> Vec<u8> {
+    let flagged: Vec<(&[u8], &[u8], u16)> = entries.iter().map(|(n, d, utf8)| (*n, *d, if *utf8 { 0x0800 } else { 0 })).collect();
+    zip_with_flags(&flagged)
+}
+
+/// Like `zip`, with raw general-purpose flags (bit 0 marks an encrypted member).
+pub fn zip_with_flags(entries: &[(&[u8], &[u8], u16)]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut central = Vec::new();
-    for (name, data, utf8) in entries {
+    for &(name, data, flags) in entries {
         let mut crc = flate2::Crc::new();
         crc.update(data);
-        let flags: u16 = if *utf8 { 0x0800 } else { 0 };
         let offset = out.len() as u32;
         let common = |v: &mut Vec<u8>| {
             v.extend_from_slice(&20u16.to_le_bytes());

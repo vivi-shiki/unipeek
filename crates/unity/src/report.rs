@@ -38,6 +38,8 @@ pub enum Degrade {
     /// An FBX material slot got no material and no texture: drawn white.
     MissingMaterial { model: String, slot: String },
     UnknownShader { material: String, shader: Option<String> },
+    /// The `.mat` exists but could not be read (binary serialization, too large): drawn white.
+    MaterialUnreadable { material: String, reason: String },
     MissingTexture { material: String, guid: crate::Guid },
     TextureUnreadable { path: String, reason: String },
     ModelUnreadable { path: String, reason: String },
@@ -250,6 +252,20 @@ mod tests {
         let r = Report::new("x".into(), pkg.container, None, &pkg.index, &plan);
         assert!(r.degrades.contains(&Degrade::MissingDependency { guid: Guid::parse(BASE).unwrap(), usage: Usage::Prefab }), "{:?}", r.degrades);
         assert_eq!(r.status, Status::Degraded);
+    }
+
+    #[test]
+    fn truncated_packages_and_unreadable_materials_degrade() {
+        let full = package(prefab_instancing(MODEL, &[])).asset(TEX, "Assets/A/Big.png", vec![7u8; 300_000]).build();
+        let cut = &full[..full.len() - 2000];
+        let (pkg, inner) = Package::open(Input::new(Source::Bytes(Arc::from(cut))), &IndexOptions::default()).unwrap();
+        let plan = Plan::new(&pkg.index, inner.as_deref()).unwrap();
+        let mut r = Report::new("x".into(), pkg.container, None, &pkg.index, &plan);
+        assert!(r.degrades.iter().any(|d| matches!(d, Degrade::Truncated { .. })), "{:?}", r.degrades);
+        let mut b = plan.bind(&pkg.index, plan.models[0].guid, "Body");
+        b.unreadable = Some("binary serialization".into());
+        r.add_binding("Assets/A/Avatar.fbx", "Body", &b);
+        assert!(r.degrades.contains(&Degrade::MaterialUnreadable { material: "Assets/A/Body.mat".into(), reason: "binary serialization".into() }), "{:?}", r.degrades);
     }
 
     #[test]
