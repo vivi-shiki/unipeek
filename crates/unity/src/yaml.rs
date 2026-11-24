@@ -512,7 +512,7 @@ PrefabInstance:
       objectReference: {fileID: 2100000, guid: fd7c89bf2761e894eaf746251d625bab, type: 2}
     - target: {fileID: 1, guid: 4f920a12728c5f44db851043221361cb, type: 3}
       propertyPath: m_Name
-      value: Kipfel
+      value: Avatar
       objectReference: {fileID: 0}
   m_SourcePrefab: {fileID: 100100000, guid: 7078d86f15dd32d4bb4540ac2ff9e0ac, type: 3}
 ";
@@ -525,7 +525,7 @@ PrefabInstance:
         assert_eq!(t.kind, Some(3));
         assert_eq!(mods[0].get("propertyPath").and_then(Node::as_str), Some("m_Materials.Array.data[1]"));
         assert_eq!(mods[0].get("value"), Some(&Node::Null));
-        assert_eq!(mods[1].get("value").and_then(Node::as_str), Some("Kipfel"));
+        assert_eq!(mods[1].get("value").and_then(Node::as_str), Some("Avatar"));
         assert_eq!(d.body.get("m_SourcePrefab").unwrap().reference().unwrap().file_id, 100100000);
     }
 
