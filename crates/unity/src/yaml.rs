@@ -29,8 +29,8 @@ impl ObjRef {
 }
 
 impl Node {
-    pub fn get(&self, _key: &str) -> Option<&Node> {
-        todo!()
+    pub fn get(&self, key: &str) -> Option<&Node> {
+        self.entries().iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
     /// Follow a chain of keys.
@@ -39,28 +39,40 @@ impl Node {
     }
 
     pub fn as_str(&self) -> Option<&str> {
-        todo!()
+        match self {
+            Node::Scalar(s) => Some(s),
+            _ => None,
+        }
     }
 
     pub fn as_i64(&self) -> Option<i64> {
-        todo!()
+        self.as_str()?.trim().parse().ok()
     }
 
     pub fn as_f32(&self) -> Option<f32> {
-        todo!()
+        self.as_str()?.trim().parse().ok()
     }
 
     /// Items of a sequence; an empty slice for anything else (Unity writes `[]` and `{}` for empty).
     pub fn items(&self) -> &[Node] {
-        todo!()
+        match self {
+            Node::Seq(v) => v,
+            _ => &[],
+        }
     }
 
     pub fn entries(&self) -> &[(String, Node)] {
-        todo!()
+        match self {
+            Node::Map(v) => v,
+            _ => &[],
+        }
     }
 
     pub fn reference(&self) -> Option<ObjRef> {
-        todo!()
+        let file_id = self.get("fileID")?.as_i64()?;
+        let guid = self.get("guid").and_then(Node::as_str).and_then(Guid::parse);
+        let kind = self.get("type").and_then(Node::as_i64).map(|k| k as i32);
+        Some(ObjRef { file_id, guid, kind })
     }
 }
 
@@ -76,13 +88,345 @@ pub struct Document {
 }
 
 /// Parse a Unity YAML file into its documents. Lines that do not fit are skipped, never fatal.
-pub fn parse_documents(_text: &str) -> Vec<Document> {
-    todo!()
+pub fn parse_documents(text: &str) -> Vec<Document> {
+    let mut docs = Vec::new();
+    let mut header: Option<(u32, i64, bool)> = None;
+    let mut body: Vec<&str> = Vec::new();
+    let mut flush = |header: Option<(u32, i64, bool)>, body: &mut Vec<&str>| {
+        if let Some((class_id, file_id, stripped)) = header {
+            let node = parse_lines(&logical_lines(body.iter().copied()));
+            let (type_name, body) = match node {
+                Node::Map(mut entries) if !entries.is_empty() => entries.swap_remove(0),
+                _ => (String::new(), Node::Null),
+            };
+            docs.push(Document { class_id, file_id, stripped, type_name, body });
+        }
+        body.clear();
+    };
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("---") {
+            flush(header.take(), &mut body);
+            header = parse_header(rest);
+        } else if header.is_some() {
+            body.push(line);
+        }
+    }
+    flush(header, &mut body);
+    docs
 }
 
 /// Parse a file without document headers (`.meta`).
-pub fn parse(_text: &str) -> Node {
-    todo!()
+pub fn parse(text: &str) -> Node {
+    parse_lines(&logical_lines(text.lines().filter(|l| !l.starts_with("---"))))
+}
+
+/// ` !u!21 &2100000 stripped`
+fn parse_header(rest: &str) -> Option<(u32, i64, bool)> {
+    let mut parts = rest.split_whitespace();
+    let class_id = parts.next()?.strip_prefix("!u!")?.parse().ok()?;
+    let file_id = parts.next()?.strip_prefix('&')?.parse().ok()?;
+    let stripped = parts.any(|p| p == "stripped");
+    Some((class_id, file_id, stripped))
+}
+
+struct Line {
+    indent: usize,
+    text: String,
+}
+
+/// Physical lines to logical lines: drop directives and blanks, join flow collections and quoted
+/// strings that wrap, and plain scalars continued on more-indented lines.
+fn logical_lines<'a>(lines: impl Iterator<Item = &'a str>) -> Vec<Line> {
+    let mut out: Vec<Line> = Vec::new();
+    // Indent a line must exceed to continue the plain scalar of the previous line.
+    let mut continues_after: Option<usize> = None;
+    let mut open = false;
+    for raw in lines {
+        if raw.starts_with('%') || raw.trim().is_empty() {
+            continue;
+        }
+        let indent = raw.len() - raw.trim_start_matches(' ').len();
+        let text = raw.trim();
+        if let Some(last) = out.last_mut() {
+            if open || continues_after.is_some_and(|i| indent > i) {
+                last.text.push(' ');
+                last.text.push_str(text);
+                open = is_open(&last.text);
+                continue;
+            }
+        }
+        out.push(Line { indent, text: text.to_string() });
+        let last = out.last().unwrap();
+        open = is_open(&last.text);
+        continues_after = plain_value_start(&last.text).map(|offset| indent + offset);
+    }
+    out
+}
+
+/// Offset of the key column if the line ends with a plain scalar value that could wrap.
+fn plain_value_start(text: &str) -> Option<usize> {
+    let (offset, body) = match text.strip_prefix("- ") {
+        Some(rest) => (2, rest),
+        None => (0, text),
+    };
+    let value = match split_key(body) {
+        Some((_, v)) => v,
+        None if offset == 2 => body,
+        None => return None,
+    };
+    let first = value.chars().next()?;
+    (!matches!(first, '{' | '[' | '\'' | '"' | '|' | '>')).then_some(offset)
+}
+
+/// Whether brackets or quotes are still open at the end of `text`.
+fn is_open(text: &str) -> bool {
+    let mut depth = 0i32;
+    let mut quote: Option<char> = None;
+    let value = split_key(text.strip_prefix("- ").unwrap_or(text)).map_or(text, |(_, v)| v);
+    for c in value.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '\'' | '"') if depth == 0 && value.trim_start().starts_with(c) => quote = Some(c),
+            (None, '{' | '[') => depth += 1,
+            (None, '}' | ']') => depth -= 1,
+            _ => {}
+        }
+    }
+    depth > 0 || quote.is_some()
+}
+
+/// `key: value` or `key:` outside quotes and brackets.
+fn split_key(text: &str) -> Option<(&str, &str)> {
+    if text.starts_with(['{', '[', '\'', '"', '-']) && !text.starts_with("-_") {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'{' | b'[' | b'\'' | b'"' => return None,
+            b':' if i + 1 == bytes.len() => return Some((&text[..i], "")),
+            b':' if bytes[i + 1] == b' ' => return Some((&text[..i], text[i + 2..].trim())),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn is_item(text: &str) -> bool {
+    text == "-" || text.starts_with("- ")
+}
+
+fn parse_lines(lines: &[Line]) -> Node {
+    let mut lines: Vec<Line> = lines.iter().map(|l| Line { indent: l.indent, text: l.text.clone() }).collect();
+    let mut i = 0;
+    let Some(first) = lines.first() else { return Node::Null };
+    let indent = first.indent;
+    let node = parse_block(&mut lines, &mut i, indent);
+    node
+}
+
+fn parse_block(lines: &mut [Line], i: &mut usize, indent: usize) -> Node {
+    match lines.get(*i) {
+        Some(l) if is_item(&l.text) => parse_seq(lines, i, indent),
+        Some(_) => parse_map(lines, i, indent),
+        None => Node::Null,
+    }
+}
+
+fn parse_map(lines: &mut [Line], i: &mut usize, indent: usize) -> Node {
+    let mut entries = Vec::new();
+    while let Some(line) = lines.get(*i) {
+        if line.indent < indent || (line.indent == indent && is_item(&line.text)) {
+            break;
+        }
+        if line.indent > indent {
+            *i += 1;
+            continue;
+        }
+        let Some((key, value)) = split_key(&line.text) else {
+            *i += 1;
+            continue;
+        };
+        let (key, value) = (unquote(key), value.to_string());
+        *i += 1;
+        let node = if !value.is_empty() {
+            parse_inline(&value)
+        } else {
+            match lines.get(*i) {
+                Some(next) if next.indent > indent => {
+                    let child = next.indent;
+                    parse_block(lines, i, child)
+                }
+                Some(next) if next.indent == indent && is_item(&next.text) => parse_seq(lines, i, indent),
+                _ => Node::Null,
+            }
+        };
+        entries.push((key, node));
+    }
+    Node::Map(entries)
+}
+
+fn parse_seq(lines: &mut [Line], i: &mut usize, indent: usize) -> Node {
+    let mut items = Vec::new();
+    while let Some(line) = lines.get(*i) {
+        if line.indent != indent || !is_item(&line.text) {
+            if line.indent > indent {
+                *i += 1;
+                continue;
+            }
+            break;
+        }
+        let content = line.text.strip_prefix('-').unwrap_or("").trim_start().to_string();
+        if content.is_empty() {
+            *i += 1;
+            let item = match lines.get(*i) {
+                Some(next) if next.indent > indent => {
+                    let child = next.indent;
+                    parse_block(lines, i, child)
+                }
+                _ => Node::Null,
+            };
+            items.push(item);
+        } else if split_key(&content).is_some() {
+            // `- key: value` starts a mapping whose other keys sit two columns further in.
+            lines[*i] = Line { indent: indent + 2, text: content };
+            items.push(parse_map(lines, i, indent + 2));
+        } else {
+            *i += 1;
+            items.push(parse_inline(&content));
+        }
+    }
+    Node::Seq(items)
+}
+
+fn parse_inline(text: &str) -> Node {
+    let text = text.trim();
+    if text.is_empty() {
+        return Node::Null;
+    }
+    if text.starts_with(['{', '[']) {
+        let mut chars = text.char_indices().peekable();
+        return Flow { text, chars: &mut chars }.value();
+    }
+    Node::Scalar(unquote(text))
+}
+
+fn unquote(text: &str) -> String {
+    let t = text.trim();
+    if t.len() >= 2 && t.starts_with('\'') && t.ends_with('\'') {
+        t[1..t.len() - 1].replace("''", "'")
+    } else if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') {
+        let mut out = String::new();
+        let mut chars = t[1..t.len() - 1].chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some(other) => out.push(other),
+                    None => {}
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    } else {
+        t.to_string()
+    }
+}
+
+/// Recursive descent over `{a: b, c: [d, e]}`.
+struct Flow<'a, 'b> {
+    text: &'a str,
+    chars: &'b mut std::iter::Peekable<std::str::CharIndices<'a>>,
+}
+
+impl Flow<'_, '_> {
+    fn skip_ws(&mut self) {
+        while self.chars.next_if(|(_, c)| c.is_whitespace()).is_some() {}
+    }
+
+    fn value(&mut self) -> Node {
+        self.skip_ws();
+        match self.chars.peek().map(|&(_, c)| c) {
+            Some('{') => {
+                self.chars.next();
+                let mut entries = Vec::new();
+                loop {
+                    self.skip_ws();
+                    match self.chars.peek().map(|&(_, c)| c) {
+                        None => break,
+                        Some('}') => {
+                            self.chars.next();
+                            break;
+                        }
+                        Some(',') => {
+                            self.chars.next();
+                        }
+                        Some(_) => {
+                            let key = self.scalar(&[':', ',', '}']);
+                            self.skip_ws();
+                            let value = if self.chars.next_if(|&(_, c)| c == ':').is_some() { self.value() } else { Node::Null };
+                            entries.push((key, value));
+                        }
+                    }
+                }
+                Node::Map(entries)
+            }
+            Some('[') => {
+                self.chars.next();
+                let mut items = Vec::new();
+                loop {
+                    self.skip_ws();
+                    match self.chars.peek().map(|&(_, c)| c) {
+                        None => break,
+                        Some(']') => {
+                            self.chars.next();
+                            break;
+                        }
+                        Some(',') => {
+                            self.chars.next();
+                        }
+                        Some(_) => items.push(self.value()),
+                    }
+                }
+                Node::Seq(items)
+            }
+            Some(_) => {
+                let s = self.scalar(&[',', '}', ']']);
+                if s.is_empty() { Node::Null } else { Node::Scalar(s) }
+            }
+            None => Node::Null,
+        }
+    }
+
+    fn scalar(&mut self, stops: &[char]) -> String {
+        self.skip_ws();
+        let start = self.chars.peek().map_or(self.text.len(), |&(i, _)| i);
+        let mut end = start;
+        let mut quote: Option<char> = None;
+        while let Some(&(i, c)) = self.chars.peek() {
+            match quote {
+                Some(q) if c == q => quote = None,
+                Some(_) => {}
+                None if (c == '\'' || c == '"') && i == start => quote = Some(c),
+                // A colon only ends a key when followed by a space or a delimiter, like `a: b`.
+                None if c == ':' && stops.contains(&':') => {
+                    let next = self.text[i + 1..].chars().next();
+                    if next.is_none_or(|n| n == ' ' || n == ',' || n == '}') {
+                        break;
+                    }
+                }
+                None if stops.contains(&c) => break,
+                None => {}
+            }
+            self.chars.next();
+            end = i + c.len_utf8();
+        }
+        unquote(&self.text[start..end])
+    }
 }
 
 #[cfg(test)]
