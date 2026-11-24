@@ -5,18 +5,38 @@ use std::{fmt, str::FromStr};
 pub struct Guid([u8; 16]);
 
 impl Guid {
-    pub fn parse(_s: &str) -> Option<Guid> {
-        todo!()
+    pub fn parse(s: &str) -> Option<Guid> {
+        let b = s.as_bytes();
+        if b.len() != 32 {
+            return None;
+        }
+        let mut out = [0u8; 16];
+        for (i, pair) in b.chunks_exact(2).enumerate() {
+            out[i] = (hex(pair[0])? << 4) | hex(pair[1])?;
+        }
+        Some(Guid(out))
     }
 
     pub fn is_zero(&self) -> bool {
-        todo!()
+        self.0 == [0; 16]
     }
 }
 
 impl fmt::Display for Guid {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        todo!()
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for b in self.0 {
+            write!(f, "{b:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+fn hex(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
     }
 }
 

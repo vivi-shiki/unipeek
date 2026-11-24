@@ -10,22 +10,36 @@ pub enum Source {
     Path(PathBuf),
     Bytes(Arc<[u8]>),
     Reader(Box<dyn Read + Send>),
+    /// A `Reader` source after its only read.
+    Consumed,
 }
 
 impl Source {
     /// Open a fresh reader. A `Reader` source can only be opened once; later calls fail.
     pub fn open(&mut self) -> io::Result<Box<dyn Read + Send + '_>> {
-        todo!()
+        match self {
+            Source::Path(p) => Ok(Box::new(io::BufReader::with_capacity(1 << 20, std::fs::File::open(p)?))),
+            Source::Bytes(b) => Ok(Box::new(io::Cursor::new(b.clone()))),
+            Source::Reader(_) => {
+                let Source::Reader(r) = std::mem::replace(self, Source::Consumed) else { unreachable!() };
+                Ok(r)
+            }
+            Source::Consumed => Err(io::Error::other("the reader of this source was already consumed")),
+        }
     }
 
     /// Whether `open` can be called again after the first read.
     pub fn reopenable(&self) -> bool {
-        todo!()
+        !matches!(self, Source::Reader(_) | Source::Consumed)
     }
 
     /// Short description for reports and errors. Never includes the bytes.
     pub fn describe(&self) -> String {
-        todo!()
+        match self {
+            Source::Path(p) => p.display().to_string(),
+            Source::Bytes(b) => format!("<{} bytes>", b.len()),
+            Source::Reader(_) | Source::Consumed => "<reader>".into(),
+        }
     }
 }
 
@@ -49,14 +63,40 @@ impl Input {
 
     /// Split a command line argument at `#` after a container (`.unitypackage`, `.zip`).
     /// A `#` inside a folder or file name is kept.
-    pub fn parse_location(_location: &str) -> (PathBuf, Vec<String>) {
-        todo!()
+    pub fn parse_location(location: &str) -> (PathBuf, Vec<String>) {
+        let mut parts = Vec::new();
+        let mut cur = String::new();
+        for (i, piece) in location.split('#').enumerate() {
+            if i > 0 {
+                cur.push('#');
+            }
+            cur.push_str(piece);
+            if is_container(&cur) {
+                parts.push(std::mem::take(&mut cur));
+            }
+        }
+        if !cur.is_empty() {
+            match parts.last_mut() {
+                // `#` right after a container starts the next inner path; the separator itself is dropped.
+                Some(_) if cur.starts_with('#') => parts.push(cur[1..].to_string()),
+                Some(last) => last.push_str(&cur),
+                None => parts.push(cur),
+            }
+        }
+        let mut parts = parts.into_iter();
+        let path = PathBuf::from(parts.next().unwrap_or_default());
+        (path, parts.map(|p| p.strip_prefix('#').unwrap_or(&p).to_string()).collect())
     }
 
     pub fn from_location(location: &str) -> Input {
         let (path, inner) = Input::parse_location(location);
         Input { source: Source::Path(path), inner }
     }
+}
+
+pub(crate) fn is_container(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".unitypackage") || lower.ends_with(".zip")
 }
 
 #[cfg(test)]
