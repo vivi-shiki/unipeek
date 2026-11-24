@@ -226,3 +226,28 @@ fn texture_name_fallback_skips_empty_slots_and_normal_maps() {
     assert_eq!(plan.bind(&idx, g(MODEL), "Skin").source, BindSource::Unbound, "normal maps (textureType 1) are not main textures");
     assert_eq!(plan.bind(&idx, g(MODEL), "OpenGL").source, BindSource::Unbound, "nor are files named like normal maps");
 }
+
+#[test]
+fn unity_builtin_guids_are_never_missing() {
+    let builtin_mesh = format!(
+        "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Cube\n  m_IsActive: 1\n--- !u!33 &2\nMeshFilter:\n  m_GameObject: {{fileID: 1}}\n  m_Mesh: {{fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}}\n--- !u!23 &3\nMeshRenderer:\n  m_GameObject: {{fileID: 1}}\n  m_Materials:\n  - {{fileID: 10303, guid: 0000000000000000f000000000000000, type: 0}}\n"
+    );
+    let text = format!("{}{}", prefab_instancing(MODEL, &[]), builtin_mesh.replace("%YAML 1.1\n", ""));
+    let idx = index(PackageBuilder::new().asset(MODEL, "Assets/A/M.fbx", fbx(10)).asset(PREFAB, "Assets/A/M.prefab", text));
+    let plan = Plan::new(&idx, None).unwrap();
+    assert!(plan.missing.is_empty(), "{:?}", plan.missing);
+}
+
+#[test]
+fn main_prefab_uses_the_largest_model_before_name_matches() {
+    let idx = index(
+        PackageBuilder::new()
+            .asset(MODEL, "Assets/Shop/FBX/Outfit.fbx", fbx(9000))
+            .asset(TOY, "Assets/Shop/FBX/Pet.fbx", fbx(500))
+            .asset(PREFAB, "Assets/Shop/Outfit_Black.prefab", prefab_instancing(MODEL, &[]))
+            .asset(VARIANT, "Assets/Shop/Outfit_withPet.prefab", prefab_instancing(MODEL, &[]) + &prefab_instancing(TOY, &[]).replace("%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n", "").replace("&100100000001", "&100100000002"))
+            .asset(DYNAMICS, "Assets/Shop/Extra/Pet.prefab", prefab_instancing(TOY, &[])),
+    );
+    let plan = Plan::new(&idx, None).unwrap();
+    assert_eq!(plan.prefab.unwrap().path, "Assets/Shop/Outfit_Black.prefab");
+}
