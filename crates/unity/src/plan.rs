@@ -95,7 +95,8 @@ impl Plan {
     /// Plan the package. `inner` selects a prefab or model by its path inside the package.
     pub fn new(index: &PackageIndex, inner: Option<&str>) -> Result<Plan> {
         let mut walker = Walker { index, prefabs: BTreeMap::new() };
-        let mut candidates: Vec<(Candidate, (bool, bool, usize, usize, String))> = Vec::new();
+        let largest = index.entries().filter(|e| is_model(e)).max_by_key(|e| e.size.unwrap_or(0)).map(|e| e.guid);
+        let mut candidates: Vec<(Candidate, (bool, bool, usize, bool, usize, String))> = Vec::new();
         for e in index.entries().filter(|e| is_prefab(e)) {
             let walk = walker.walk(e.guid);
             if walk.models.is_empty() {
@@ -105,7 +106,10 @@ impl Plan {
             let stem = e.stem().unwrap_or_default().to_lowercase();
             let matches_model = walk.models.iter().any(|m| index.get(m).and_then(Entry::stem).is_some_and(|s| s.to_lowercase() == stem));
             let variant = walker.variant_of_prefab(e.guid);
-            let key = (variant, !matches_model, path.matches('/').count(), stem.chars().count(), path.to_lowercase());
+            // The package's biggest model is usually the product; a name matching a small extra
+            // model (a pet, a prop) must not beat it.
+            let has_largest = largest.is_some_and(|g| walk.models.contains(&g));
+            let key = (variant, !has_largest, path.matches('/').count(), !matches_model, stem.chars().count(), path.to_lowercase());
             candidates.push((Candidate { guid: e.guid, path, models: walk.models.len(), variant }, key));
         }
         candidates.sort_by(|a, b| a.1.cmp(&b.1));
@@ -215,6 +219,12 @@ fn is_normal_map(e: &Entry) -> bool {
     e.meta.as_deref().is_some_and(|m| Meta::parse(m).normal_map) || e.stem().is_some_and(|s| s.to_lowercase().contains("normal"))
 }
 
+/// Unity's built-in resources (`unity default resources`, `unity_builtin_extra`) are always there.
+fn is_builtin(g: &Guid) -> bool {
+    let s = g.to_string();
+    s == "0000000000000000e000000000000000" || s == crate::shader::BUILTIN_GUID
+}
+
 fn common_prefix(a: &str, b: &str) -> usize {
     a.split('/').zip(b.split('/')).take_while(|(x, y)| x.eq_ignore_ascii_case(y)).count()
 }
@@ -287,7 +297,7 @@ impl Walker<'_> {
             }
         }
         for (g, usage) in &prefab.references {
-            if index.get(g).is_none_or(|e| e.size.is_none()) && *usage != Usage::Other {
+            if index.get(g).is_none_or(|e| e.size.is_none()) && *usage != Usage::Other && !is_builtin(g) {
                 walk.missing.insert(MissingRef { guid: *g, usage: *usage });
             }
         }
