@@ -23,14 +23,17 @@ First version a host can depend on (roadmap M1 to M3). `RENDERER_VERSION` is 1.
 - `Plan`: chooses the main prefab (the plain prefab with the package's largest model before variants
   and extras), follows nested prefabs, and binds every FBX material slot through prefab renderers,
   `externalObjects`, material names and texture names. Lists GUIDs missing from the package.
-- `Report` with degrade reasons and `Status` (ok, degraded, unsupported, error).
+- `Report` with degrade reasons and `Status` (ok, degraded, unsupported, error). Binary-serialized or
+  oversized `.mat` files are reported as `material_unreadable`.
 
 ### unipeek
 
 - `Scene::load`: CPU-only loading of models (ufbx), bindings and textures (decoded on worker threads,
   scaled and mip-mapped), with triangle, bone and blend shape counts in the report.
 - Renderer for scenes: opaque, cutout, transparent and inverted-hull outline passes, per-material cull.
-- `render_thumbnail` / `write_thumbnail` on a headless device (DX12, then Vulkan or Metal), PNG and
+- `Gpu::headless` tries DX12, then Vulkan or Metal, then any backend, and keeps the failed attempts in
+  `Gpu::fallback`; `serve` replies name the backend that rendered.
+- `render_thumbnail` / `write_thumbnail` on a headless device, PNG and
   lossless WebP, transparent or solid background, views front, side, back and 3q.
 - `serve`: one JSON request per line (thumb, info, version) for a host's child process.
 - `unipeek` command line (feature `cli`, on by default): `info [--json]`, `ls`, `thumb`, `serve`,
