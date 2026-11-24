@@ -7052,11 +7052,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "flate2",
  "glam",
  "image",
  "pollster",
  "serde",
  "serde_json",
+ "tar",
  "thiserror 2.0.21",
  "ufbx",
  "unipeek-unity",

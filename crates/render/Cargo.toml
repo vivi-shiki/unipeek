@@ -22,6 +22,8 @@ serde_json.workspace = true
 
 [dev-dependencies]
 unipeek-unity = { workspace = true, features = ["testing"] }
+tar.workspace = true
+flate2.workspace = true
 
 [features]
 default = ["cli"]

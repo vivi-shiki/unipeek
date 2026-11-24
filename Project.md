@@ -94,6 +94,7 @@ The split follows `REPO-ROOT/docs/INTEGRATION.md` (M0 decision 1): Snowcase `for
 
 Real samples are paid BOOTH assets and live outside the repo.
 - Tests that need a real sample must read its location from the environment variable `UNIPEEK_SAMPLES`, and skip with a printed message when it is not set.
+- The local sample set is `crates/render/tests/local_samples.rs`. It reads `UNIPEEK_SAMPLES/unipeek-samples.json`, a manifest that lives next to the samples (never in the repo) and lists each sample's expected status, prefab, triangle count, bound materials and degrade reasons. Update the manifest when a change is intended. `UNIPEEK_BIG=1` also streams a synthetic package of more than 3 GB.
 - Tests that run in CI must use generated fixtures: build a tiny `.unitypackage`, zip, FBX or PNG in the test itself, or commit a small file you created yourself.
 - Never print the content of a sample into logs or task documents beyond names and sizes.
 
