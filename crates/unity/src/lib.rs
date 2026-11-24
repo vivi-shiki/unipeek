@@ -5,6 +5,7 @@ pub mod package;
 pub mod source;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod yaml;
 
 pub use error::{Error, Result};
 pub use guid::Guid;
