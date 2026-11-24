@@ -1,10 +1,10 @@
-//! FBX -> flat triangle soup, grouped by material.
+//! FBX -> flat triangle soup, grouped by material slot.
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct Vertex {
     pub pos: [f32; 3],
     pub normal: [f32; 3],
@@ -23,6 +23,18 @@ pub struct Model {
     pub parts: Vec<Part>,
     pub min: Vec3,
     pub max: Vec3,
+    pub bones: usize,
+    pub blend_shapes: usize,
+}
+
+fn load_opts() -> ufbx::LoadOpts<'static> {
+    ufbx::LoadOpts {
+        target_axes: ufbx::CoordinateAxes::right_handed_y_up(),
+        target_unit_meters: 1.0,
+        space_conversion: ufbx::SpaceConversion::ModifyGeometry,
+        generate_missing_normals: true,
+        ..Default::default()
+    }
 }
 
 impl Model {
@@ -31,17 +43,19 @@ impl Model {
     }
 
     pub fn load_fbx(path: &str) -> Result<Model> {
-        let opts = ufbx::LoadOpts {
-            target_axes: ufbx::CoordinateAxes::right_handed_y_up(),
-            target_unit_meters: 1.0,
-            space_conversion: ufbx::SpaceConversion::ModifyGeometry,
-            generate_missing_normals: true,
-            ..Default::default()
-        };
-        let scene = ufbx::load_file(path, opts)
-            .map_err(|e| anyhow::anyhow!("ufbx: {:?}", e.description))
-            .with_context(|| format!("loading {path}"))?;
+        let scene = ufbx::load_file(path, load_opts()).map_err(|e| anyhow::anyhow!("ufbx: {:?}", e.description)).with_context(|| format!("loading {path}"))?;
+        let model = Model::from_scene(&scene);
+        anyhow::ensure!(!model.vertices.is_empty(), "no mesh data in {path}");
+        Ok(model)
+    }
 
+    /// Parse FBX bytes (binary or ASCII). The error is ufbx's description.
+    pub fn from_fbx_bytes(bytes: &[u8]) -> std::result::Result<Model, String> {
+        let scene = ufbx::load_memory(bytes, load_opts()).map_err(|e| e.description.to_string())?;
+        Ok(Model::from_scene(&scene))
+    }
+
+    fn from_scene(scene: &ufbx::Scene) -> Model {
         let mut vertices = Vec::new();
         let mut parts = Vec::new();
         let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
@@ -83,20 +97,13 @@ impl Model {
                         });
                     }
                 }
-                let material = mesh
-                    .materials
-                    .get(part.index as usize)
-                    .map(|m| m.element.name.to_string())
-                    .unwrap_or_default();
-                parts.push(Part {
-                    material,
-                    mesh: node.element.name.to_string(),
-                    first,
-                    count: vertices.len() as u32 - first,
-                });
+                let material = mesh.materials.get(part.index as usize).map(|m| m.element.name.to_string()).unwrap_or_default();
+                parts.push(Part { material, mesh: node.element.name.to_string(), first, count: vertices.len() as u32 - first });
             }
         }
-        anyhow::ensure!(!vertices.is_empty(), "no mesh data in {path}");
-        Ok(Model { vertices, parts, min, max })
+        if vertices.is_empty() {
+            (min, max) = (Vec3::ZERO, Vec3::ZERO);
+        }
+        Model { vertices, parts, min, max, bones: scene.bones.len(), blend_shapes: scene.blend_channels.len() }
     }
 }
