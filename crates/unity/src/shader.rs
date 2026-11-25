@@ -11,6 +11,8 @@ pub enum ShaderFamily {
     Poiyomi,
     MToon,
     Standard,
+    /// The VRChat SDK's mobile shaders (Toon Lit, MatCap Lit, ...), common in Quest packages.
+    VrchatMobile,
     UnityBuiltin,
     Unknown,
 }
@@ -122,6 +124,20 @@ pub const LILTOON_SHADERS: &[(&str, &str, &str)] = &[
     ("2683fad669f20ec49b8e9656954a33a8", "ltspass_transparent", "Hidden/ltspass_transparent"),
 ];
 
+/// VRChat SDK 3.x (`com.vrchat.base`, `Sample Assets/Shaders/Mobile`): GUID and shader name.
+pub const VRCHAT_MOBILE_SHADERS: &[(&str, &str)] = &[
+    ("affc81f3d164d734d8f13053effb1c5c", "VRChat/Mobile/Toon Lit"),
+    ("3ad043b7f9839cb48a75a9238d433dec", "VRChat/Mobile/MatCap Lit"),
+    ("2dcd9e0568e0a6f45b92c60ba2eb16a0", "VRChat/Mobile/Diffuse"),
+    ("f8c1f8ac363df824899534a0b30eef00", "VRChat/Mobile/Bumped Diffuse"),
+    ("528d55c4e8adab14b974ca665ed1b996", "VRChat/Mobile/Bumped Mapped Specular"),
+    ("584dc70fbb9834e48beb29e3206e3ca0", "VRChat/Mobile/Bumped Mapped Specular"),
+    ("b1f7ecc80417c414b9d62ce541d5bcbf", "VRChat/Mobile/Lightmapped"),
+    ("9200bec112b65ec4fbbbd33fa89c20f4", "VRChat/Mobile/Particles/Additive"),
+    ("8b39b95ac85682040beff730e0cfc77a", "VRChat/Mobile/Particles/Alpha Blended"),
+    ("d5b89f0c74ccf5049ba803c14a090378", "VRChat/Mobile/Particles/Multiply"),
+];
+
 /// Identify a shader by its reference and, when the shader file is in the package, its name.
 pub fn identify(shader: ObjRef, name_in_package: Option<&str>) -> ShaderInfo {
     let mut info = ShaderInfo {
@@ -136,6 +152,12 @@ pub fn identify(shader: ObjRef, name_in_package: Option<&str>) -> ShaderInfo {
     if guid.as_deref() == Some(BUILTIN_GUID) {
         // fileID 46 is Standard, 45 Standard (Specular setup).
         info.family = if matches!(shader.file_id, 45 | 46) { ShaderFamily::Standard } else { ShaderFamily::UnityBuiltin };
+        return info;
+    }
+    if let Some((_, name)) = VRCHAT_MOBILE_SHADERS.iter().find(|(g, _)| Some(*g) == guid.as_deref()) {
+        info.family = ShaderFamily::VrchatMobile;
+        info.mode = Some(if name.contains("Particles") { RenderMode::Transparent } else { RenderMode::Opaque });
+        info.name = Some(name.to_string());
         return info;
     }
     if let Some((_, file, name)) = LILTOON_SHADERS.iter().find(|(g, _, _)| Some(*g) == guid.as_deref()) {
@@ -248,6 +270,16 @@ mod tests {
 
         let multi = by_guid("51b2dee0ab07bd84d8147601ff89e511");
         assert_eq!((multi.family, multi.mode, multi.outline), (ShaderFamily::LilToonMulti, None, true));
+    }
+
+    #[test]
+    fn vrchat_mobile_shaders() {
+        let toon = by_guid("affc81f3d164d734d8f13053effb1c5c");
+        assert_eq!((toon.family, toon.mode, toon.name.as_deref()), (ShaderFamily::VrchatMobile, Some(RenderMode::Opaque), Some("VRChat/Mobile/Toon Lit")));
+        assert_eq!(by_guid("8b39b95ac85682040beff730e0cfc77a").mode, Some(RenderMode::Transparent));
+        for (g, _) in VRCHAT_MOBILE_SHADERS {
+            assert!(Guid::parse(g).is_some());
+        }
     }
 
     #[test]

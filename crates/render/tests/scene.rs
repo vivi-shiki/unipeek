@@ -130,3 +130,35 @@ fn psd_without_composite_is_unreadable_and_reports_skip_decoding() {
     assert_eq!(report_only.report.materials[1].texture_size, Some([4096, 16]), "sizes come from the headers");
     assert_eq!(report_only.report.status, Status::Ok);
 }
+
+#[test]
+fn prefab_overrides_reach_the_renderer_on_the_fbx_node() {
+    use unipeek::unity::fileid;
+    // The quads FBX has one top-level node, merged into the model prefab's root.
+    let renderer = fileid::component(&fileid::node_path(&["Quads"], 1), "MeshRenderer");
+    let size = format!("    - target: {{fileID: {renderer}, guid: {MODEL},\n        type: 3}}\n      propertyPath: m_Materials.Array.size\n      value: 3\n      objectReference: {{fileID: 0}}\n");
+    let prefab = prefab_instancing(MODEL, &[(renderer, 1, RED_MAT), (renderer, 2, BLUE_MAT), (99999, 0, BLUE_MAT)]).replace("    m_RemovedComponents", &format!("{size}    m_RemovedComponents"));
+    let pkg = PackageBuilder::new()
+        .asset_with_meta(MODEL, "Assets/Shop/Quads.fbx", fbx_ascii(&["Red", "Blue"]), model_meta(MODEL, &[("Red", RED_MAT), ("Blue", BLUE_MAT)]))
+        .asset(RED_MAT, "Assets/Shop/Red.mat", material_yaml("Red", LILTOON, 4800000, Some(RED_TEX), -1))
+        .asset(BLUE_MAT, "Assets/Shop/Blue.mat", material_yaml("Blue", LILTOON, 4800000, Some(BLUE_TEX), -1))
+        .asset(RED_TEX, "Assets/Shop/Red.png", png(4, 4, [255, 0, 0, 255]))
+        .asset(BLUE_TEX, "Assets/Shop/Blue.png", png(4, 4, [0, 0, 255, 255]))
+        .asset(PREFAB, "Assets/Shop/Quads.prefab", prefab)
+        .build();
+    let scene = Scene::load(input(pkg), &LoadOptions::default()).unwrap();
+    let names: Vec<&str> = scene.parts.iter().map(|p| scene.materials[p.material].name.as_str()).collect();
+    assert_eq!(names, vec!["Red", "Red", "Blue"], "slot 1 overridden to Red, slot 2 added after the last submesh");
+    assert_eq!(scene.parts[1].first, scene.parts[2].first, "the added material draws the last submesh again");
+    assert!(!scene.report.degrades.iter().any(|d| matches!(d, Degrade::MaterialOverridesIgnored { .. })), "{:?}", scene.report.degrades);
+    assert_eq!(scene.report.stale_overrides, 1, "an override of an object the FBX no longer has is a leftover");
+
+    // A target that matches no node is reported.
+    let stray = prefab_instancing(MODEL, &[(12345, 0, BLUE_MAT)]);
+    let pkg = PackageBuilder::new()
+        .asset_with_meta(MODEL, "Assets/Shop/Quads.fbx", fbx_ascii(&["Red"]), model_meta(MODEL, &[]))
+        .asset(PREFAB, "Assets/Shop/Quads.prefab", stray)
+        .build();
+    let scene = Scene::load(input(pkg), &LoadOptions::default()).unwrap();
+    assert!(scene.report.degrades.contains(&Degrade::MaterialOverridesIgnored { count: 1 }), "{:?}", scene.report.degrades);
+}

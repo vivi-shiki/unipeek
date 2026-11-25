@@ -15,6 +15,10 @@ pub struct Part {
     /// Index of the material in its mesh, which is the submesh slot of a Unity renderer.
     pub slot: usize,
     pub mesh: String,
+    /// The node's identifier path in Unity's model prefab (`unipeek_unity::fileid::node_path`).
+    pub path: String,
+    /// Material slots of the node's mesh, so a renderer's extra materials can be detected.
+    pub submeshes: usize,
     pub first: u32,
     pub count: u32,
 }
@@ -63,9 +67,19 @@ impl Model {
         let mut parts = Vec::new();
         let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
         let mut tri = Vec::new();
+        let top_level = scene.root_node.children.len();
 
         for node in &scene.nodes {
             let Some(mesh) = node.mesh.as_ref() else { continue };
+            let mut names = Vec::new();
+            let mut cur = Some(node);
+            while let Some(n) = cur.filter(|n| !n.is_root) {
+                names.push(n.element.name.to_string());
+                cur = n.parent.as_deref();
+            }
+            names.reverse();
+            let path = unipeek_unity::fileid::node_path(&names, top_level);
+            let submeshes = mesh.materials.len().max(1);
             let to_world = node.geometry_to_world;
             let normal_mat = ufbx::matrix_for_normals(&to_world);
             let local = mesh.skinned_is_local;
@@ -101,7 +115,7 @@ impl Model {
                     }
                 }
                 let material = mesh.materials.get(part.index as usize).map(|m| m.element.name.to_string()).unwrap_or_default();
-                parts.push(Part { material, slot: part.index as usize, mesh: node.element.name.to_string(), first, count: vertices.len() as u32 - first });
+                parts.push(Part { material, slot: part.index as usize, mesh: node.element.name.to_string(), path: path.clone(), submeshes, first, count: vertices.len() as u32 - first });
             }
         }
         if vertices.is_empty() {

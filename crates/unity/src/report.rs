@@ -45,7 +45,8 @@ pub enum Degrade {
     /// The texture was read with an approximation (a PSD composite in CMYK or 16 bits, ...).
     TextureApproximated { path: String, reason: String },
     ModelUnreadable { path: String, reason: String },
-    /// `m_Materials` overrides on model instances were not applied.
+    /// `m_Materials` overrides that could not be matched to a renderer were not applied. Added by the
+    /// loader, which knows the models' node hierarchy.
     MaterialOverridesIgnored { count: usize },
     Truncated { message: String },
 }
@@ -114,6 +115,8 @@ pub struct Report {
     pub issues: Vec<PackageIssue>,
     pub read: ReadStats,
     pub timings: Timings,
+    /// `m_Materials` overrides of objects that are no longer in the model; Unity ignores them too.
+    pub stale_overrides: usize,
     pub status: Status,
 }
 
@@ -132,6 +135,7 @@ impl Report {
             issues: index.issues.clone(),
             read: index.stats,
             timings: Timings::default(),
+            stale_overrides: 0,
             status: Status::Ok,
         };
         if plan.models.is_empty() {
@@ -141,9 +145,6 @@ impl Report {
             if matches!(m.usage, Usage::Prefab | Usage::Mesh) {
                 r.degrade(Degrade::MissingDependency { guid: m.guid, usage: m.usage });
             }
-        }
-        if plan.material_overrides > 0 {
-            r.degrade(Degrade::MaterialOverridesIgnored { count: plan.material_overrides });
         }
         for issue in &index.issues {
             if let PackageIssue::Truncated { message, .. } = issue {
@@ -267,7 +268,8 @@ mod tests {
     fn bindings_add_degrades_and_missing_textures() {
         let (pkg, plan) = open(package(prefab_instancing(MODEL, &[(-1, 0, MAT)])));
         let mut r = Report::new("x".into(), pkg.container, None, &pkg.index, &plan);
-        assert!(r.degrades.contains(&Degrade::MaterialOverridesIgnored { count: 1 }));
+        assert!(!r.degrades.iter().any(|d| matches!(d, Degrade::MaterialOverridesIgnored { .. })), "overrides of model renderers are applied by the loader");
+        assert_eq!(plan.renderer_overrides.len(), 1);
         let model = plan.models[0].guid;
         r.add_binding("Assets/A/Avatar.fbx", "Odd", &plan.bind(&pkg.index, model, "Odd"));
         r.add_binding("Assets/A/Avatar.fbx", "Eyes", &plan.bind(&pkg.index, model, "Eyes"));

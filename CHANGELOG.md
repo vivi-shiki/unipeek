@@ -6,7 +6,8 @@ the minor version may break the API; `0.1.x` releases only fix bugs and add thin
 
 ## Unreleased
 
-`RENDERER_VERSION` is 2: PSD textures that used to be drawn white are now drawn.
+`RENDERER_VERSION` is 2: PSD textures that used to be drawn white are now drawn, and prefab material
+overrides on FBX instances are applied.
 
 ### unipeek-unity
 
@@ -14,6 +15,13 @@ the minor version may break the API; `0.1.x` releases only fix bugs and add thin
   binding materials, decoding textures, rendering and encoding.
 - `Degrade::TextureApproximated`: a texture was read with an approximation (CMYK or 16/32-bit PSD).
 - `testing::PsdBuilder` builds Photoshop files for tests.
+- `fileid`: the local file IDs Unity gives objects inside an imported model (xxHash64 of type and
+  hierarchy path), so prefab modifications can be matched to FBX nodes.
+- `Plan::renderer_overrides`, `Plan::bind_renderer`, `Plan::extra_materials`: `m_Materials` overrides
+  that a prefab makes on an instance of a model, by renderer, including materials added after the
+  last submesh. `BindSource::PrefabOverride`. `Report::stale_overrides` counts overrides of objects the
+  FBX no longer has; `material_overrides_ignored` now only means overrides that could not be matched.
+- VRChat SDK mobile shaders (Toon Lit, MatCap Lit, ...) are recognized (`ShaderFamily::VrchatMobile`).
 
 ### unipeek
 
@@ -23,6 +31,8 @@ the minor version may break the API; `0.1.x` releases only fix bugs and add thin
 - `LoadOptions::decode_textures`: off for reports. `info` and the serve `info` request now read texture
   sizes from the file headers instead of decoding every texture.
 - `unipeek thumb --timings` prints where the time went, including GPU start-up.
+- Prefab `m_Materials` overrides on FBX instances are applied; a material added after the last submesh
+  draws that submesh again, as in Unity.
 - `serve::Worker`: the host side of `serve`. Runs the child process, restarts it after it dies or
   times out, and returns an error only for the request that was in flight.
 - Fully transparent thumbnail pixels are always black (they used to keep a little blended color

@@ -12,7 +12,7 @@ use std::{
     time::Instant,
 };
 use unipeek_unity::{
-    Degrade, Guid, IndexOptions, Input, Package, PackageIndex, Plan, Report, Timings,
+    Degrade, fileid, Guid, IndexOptions, Input, Package, PackageIndex, Plan, Report, Timings,
     material::{Look, Material},
     meta::Meta,
 };
@@ -110,25 +110,53 @@ impl Scene {
         let mut slots: BTreeMap<(Guid, String, usize, String), usize> = BTreeMap::new();
         let mut vertices = Vec::new();
         let mut parts = Vec::new();
+        let mut applied: BTreeSet<(Guid, i64)> = BTreeSet::new();
         for (planned, model) in &models {
             let offset = vertices.len() as u32;
             vertices.extend_from_slice(&model.vertices);
             for part in &model.parts {
-                let key = (planned.guid, part.mesh.clone(), part.slot, part.material.clone());
-                let material = *slots.entry(key).or_insert_with(|| {
-                    let binding = plan.bind_slot(&pkg.index, planned.guid, &part.mesh, part.slot, &part.material);
-                    report.add_binding(&planned.path, &part.material, &binding);
-                    materials.push(SceneMaterial {
-                        name: binding.material_name.clone().unwrap_or_else(|| part.material.clone()),
-                        look: binding.look,
-                        texture: None,
-                    });
-                    material_textures.push(binding.main_texture.filter(|t| t.in_package).map(|t| t.guid));
-                    material_slots.push((planned.path.clone(), part.material.clone()));
-                    materials.len() - 1
-                });
+                let renderers = [fileid::component(&part.path, "SkinnedMeshRenderer"), fileid::component(&part.path, "MeshRenderer")];
+                if let Some(o) = plan.renderer_override(planned.guid, &renderers) {
+                    applied.insert((o.model, o.target));
+                }
+                // The last submesh is drawn once more for each material a prefab adds after it.
+                let mut extra = Vec::new();
+                if part.slot + 1 == part.submeshes {
+                    extra = plan.extra_materials(planned.guid, &renderers, part.submeshes);
+                }
+                let mut bind = |slot: usize, label: String, binding: &dyn Fn() -> unipeek_unity::Binding| {
+                    let key = (planned.guid, part.path.clone(), slot, label.clone());
+                    *slots.entry(key).or_insert_with(|| {
+                        let binding = binding();
+                        report.add_binding(&planned.path, &label, &binding);
+                        materials.push(SceneMaterial { name: binding.material_name.clone().unwrap_or_else(|| label.clone()), look: binding.look, texture: None });
+                        material_textures.push(binding.main_texture.filter(|t| t.in_package).map(|t| t.guid));
+                        material_slots.push((planned.path.clone(), label.clone()));
+                        materials.len() - 1
+                    })
+                };
+                let material = bind(part.slot, part.material.clone(), &|| plan.bind_renderer(&pkg.index, planned.guid, &part.mesh, &renderers, part.slot, &part.material));
                 parts.push(Part { material, first: part.first + offset, count: part.count });
+                for (slot, mat) in extra {
+                    let label = format!("{}[{slot}]", part.mesh);
+                    let material = bind(slot, label, &|| plan.bind_extra(&pkg.index, mat));
+                    parts.push(Part { material, first: part.first + offset, count: part.count });
+                }
             }
+        }
+        // Prefabs keep modifications of objects that were later removed from the FBX, and Unity
+        // ignores them. When other overrides of the same model matched, an unmatched one is such a
+        // leftover; when none matched, the node names did not line up and that is a degrade.
+        let mut unmatched = plan.material_overrides;
+        for o in plan.renderer_overrides.iter().filter(|o| models.iter().any(|(m, _)| m.guid == o.model) && !applied.contains(&(o.model, o.target))) {
+            if applied.iter().any(|(m, _)| *m == o.model) {
+                report.stale_overrides += 1;
+            } else {
+                unmatched += 1;
+            }
+        }
+        if unmatched > 0 {
+            report.degrade(Degrade::MaterialOverridesIgnored { count: unmatched });
         }
 
         timings.bind_ms = Timings::since(t);

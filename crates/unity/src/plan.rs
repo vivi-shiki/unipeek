@@ -35,6 +35,18 @@ pub struct RendererMaterials {
     pub materials: Vec<Option<Guid>>,
 }
 
+/// `m_Materials` modifications a prefab makes to one renderer inside an instance of a model.
+/// `target` is the renderer's local file ID in the model (see `fileid`).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct RendererOverride {
+    pub model: Guid,
+    pub target: i64,
+    /// Slot index → material (`None` clears the slot). The outermost prefab wins.
+    pub materials: BTreeMap<usize, Option<Guid>>,
+    /// `m_Materials.Array.size`, when the prefab changes how many materials the renderer has.
+    pub size: Option<usize>,
+}
+
 /// A GUID the plan needs that is not in the package.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct MissingRef {
@@ -54,7 +66,9 @@ pub struct Plan {
     /// Renderers in the prefab that draw meshes of the models.
     pub renderer_materials: Vec<RendererMaterials>,
     pub missing: Vec<MissingRef>,
-    /// `m_Materials` overrides on model instances; their target renderer cannot be resolved yet.
+    /// `m_Materials` overrides on instances of models, by target renderer.
+    pub renderer_overrides: Vec<RendererOverride>,
+    /// `m_Materials` overrides whose target is not a renderer of a model in the package.
     pub material_overrides: usize,
 }
 
@@ -65,6 +79,8 @@ pub enum BindSource {
     ExternalObject,
     /// The prefab's renderer for this mesh assigns this slot.
     PrefabRenderer,
+    /// A prefab overrides the slot on its instance of the model (`m_Materials` modification).
+    PrefabOverride,
     /// A material the prefab assigns has the slot's name.
     PrefabMaterial,
     /// A material in the package has the slot's name.
@@ -150,12 +166,46 @@ impl Plan {
             plan.renderer_materials = walk.renderers;
             plan.missing = walk.missing.into_iter().collect();
             plan.material_overrides = walk.overrides;
+            plan.renderer_overrides = walk.renderer_overrides;
         }
         if plan.models.is_empty() && inner.is_none() {
             let largest = index.entries().filter(|e| is_model(e)).max_by_key(|e| (e.size.unwrap_or(0), std::cmp::Reverse(e.pathname.clone())));
             plan.models.extend(largest.map(planned));
         }
         Ok(plan)
+    }
+
+    /// The override of the renderer with one of the file IDs `renderers` in `model`, if the prefab has one.
+    pub fn renderer_override(&self, model: Guid, renderers: &[i64]) -> Option<&RendererOverride> {
+        self.renderer_overrides.iter().find(|o| o.model == model && renderers.contains(&o.target))
+    }
+
+    /// Like `bind_slot`, but first applies the prefab's `m_Materials` override of the renderer on
+    /// this node; `renderers` are the node's possible renderer file IDs (`fileid::component` for
+    /// `SkinnedMeshRenderer` and `MeshRenderer`).
+    pub fn bind_renderer(&self, index: &PackageIndex, model: Guid, object: &str, renderers: &[i64], slot_index: usize, slot: &str) -> Binding {
+        if let Some(o) = self.renderer_override(model, renderers)
+            && let Some(mat) = o.materials.get(&slot_index)
+        {
+            return match mat {
+                Some(mat) => bind_material(index, *mat, BindSource::PrefabOverride),
+                None => Binding { source: BindSource::Unbound, material: None, material_name: None, material_path: None, shader: None, look: Look::white(), main_texture: None, unreadable: None },
+            };
+        }
+        self.bind_slot(index, model, object, slot_index, slot)
+    }
+
+    /// Materials the prefab adds after the last submesh (`m_Materials.Array.size` larger than the
+    /// mesh's submesh count). Unity draws the last submesh again with each of them.
+    pub fn extra_materials(&self, model: Guid, renderers: &[i64], submeshes: usize) -> Vec<(usize, Guid)> {
+        let Some(o) = self.renderer_override(model, renderers) else { return Vec::new() };
+        let size = o.size.unwrap_or(0);
+        o.materials.iter().filter(|(slot, _)| **slot >= submeshes && **slot < size).filter_map(|(slot, m)| Some((*slot, (*m)?))).collect()
+    }
+
+    /// Bind an added material (see `extra_materials`).
+    pub fn bind_extra(&self, index: &PackageIndex, material: Guid) -> Binding {
+        bind_material(index, material, BindSource::PrefabOverride)
     }
 
     /// Like `bind`, but first uses the material a prefab renderer assigns to slot `slot_index` of
@@ -274,6 +324,7 @@ struct Walk {
     renderers: Vec<RendererMaterials>,
     missing: BTreeSet<MissingRef>,
     overrides: usize,
+    renderer_overrides: Vec<RendererOverride>,
 }
 
 struct Walker<'a> {
@@ -312,7 +363,30 @@ impl Walker<'_> {
         }
         let index = self.index;
         let Some(prefab) = self.prefab(guid).cloned() else { return };
-        walk.overrides += prefab.material_overrides().count();
+        for inst in &prefab.instances {
+            for m in inst.modifications.iter().filter(|m| m.property.starts_with("m_Materials.Array.")) {
+                let model = m.target.guid.filter(|g| index.get(g).is_some_and(is_model));
+                let Some(model) = model else {
+                    if m.property.starts_with("m_Materials.Array.data[") {
+                        walk.overrides += 1;
+                    }
+                    continue;
+                };
+                let pos = walk.renderer_overrides.iter().position(|o| o.model == model && o.target == m.target.file_id).unwrap_or_else(|| {
+                    walk.renderer_overrides.push(RendererOverride { model, target: m.target.file_id, materials: BTreeMap::new(), size: None });
+                    walk.renderer_overrides.len() - 1
+                });
+                let o = &mut walk.renderer_overrides[pos];
+                if m.property == "m_Materials.Array.size" {
+                    // Outer prefabs are visited first and win.
+                    if o.size.is_none() {
+                        o.size = m.value.as_deref().and_then(|v| v.trim().parse().ok());
+                    }
+                } else if let Some(slot) = m.property.strip_prefix("m_Materials.Array.data[").and_then(|r| r.strip_suffix(']')).and_then(|s| s.parse().ok()) {
+                    o.materials.entry(slot).or_insert(m.reference.and_then(|r| r.guid).filter(|g| !g.is_zero()));
+                }
+            }
+        }
         for m in prefab.material_refs() {
             if !walk.materials.contains(&m) {
                 walk.materials.push(m);

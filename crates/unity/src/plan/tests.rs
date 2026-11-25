@@ -66,7 +66,9 @@ fn main_prefab_is_the_plain_one_matching_the_model() {
     assert_eq!(paths, vec!["Assets/Shop/Avatar/Prefab/Avatar.prefab", "Assets/Shop/Avatar/Prefab/Avatar_kisekae.prefab"]);
     assert!(plan.candidates[1].variant);
     assert_eq!(plan.models, vec![PlannedModel { guid: g(MODEL), path: "Assets/Shop/Avatar/FBX/Avatar.fbx".into(), size: Some(4000) }]);
-    assert_eq!(plan.material_overrides, 1);
+    assert_eq!(plan.material_overrides, 0, "the override targets a renderer of the model");
+    assert_eq!(plan.renderer_overrides.len(), 1);
+    assert_eq!(plan.renderer_overrides[0].materials.get(&1), Some(&Some(g(ALT_MAT))));
     assert_eq!(plan.prefab_materials, vec![g(ALT_MAT)]);
     assert!(plan.missing.is_empty(), "{:?}", plan.missing);
 }
@@ -284,4 +286,46 @@ fn nested_prefabs_stop_at_32_levels() {
     let long = chain(40);
     let plan = Plan::new(&long, Some("Assets/A/P00.prefab")).unwrap();
     assert!(plan.models.is_empty(), "the walk stops after 32 nested prefabs");
+}
+
+#[test]
+fn renderer_overrides_bind_by_file_id_and_add_slots() {
+    let hair = crate::fileid::component(&crate::fileid::node_path(&["Hair"], 2), "SkinnedMeshRenderer");
+    let body = crate::fileid::component(&crate::fileid::node_path(&["Body"], 2), "SkinnedMeshRenderer");
+    let size = format!(
+        "    - target: {{fileID: {hair}, guid: {MODEL},\n        type: 3}}\n      propertyPath: m_Materials.Array.size\n      value: 2\n      objectReference: {{fileID: 0}}\n"
+    );
+    let outer = prefab_instancing(MODEL, &[(hair, 0, ALT_MAT), (hair, 1, HAIR_MAT)]).replace("    m_RemovedComponents", &format!("{size}    m_RemovedComponents"));
+    // The variant is visited first, so its slot 0 wins over the nested prefab's.
+    let inner = prefab_instancing(MODEL, &[(hair, 0, BODY_MAT)]);
+    let idx = index(
+        avatar()
+            .asset(HAIR_MAT, "Assets/Shop/Avatar/Material/Hair.mat", material_yaml("Hair", LIL_O, 4800000, Some(HAIR_TEX), 2000))
+            .asset("dddddddddddddddddddddddddddddddd", "Assets/Shop/Avatar/Prefab/Inner.prefab", inner)
+            .asset(
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                "Assets/Shop/Avatar/Prefab/Outer.prefab",
+                outer + &prefab_instancing("dddddddddddddddddddddddddddddddd", &[]).replace("%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n", "").replace("&100100000001", "&100100000002"),
+            ),
+    );
+    let plan = Plan::new(&idx, Some("Assets/Shop/Avatar/Prefab/Outer.prefab")).unwrap();
+    let o = plan.renderer_override(g(MODEL), &[hair]).expect("override found by file ID");
+    assert_eq!(o.size, Some(2));
+    assert_eq!(o.materials.get(&0), Some(&Some(g(ALT_MAT))), "outer prefab wins");
+
+    let b = plan.bind_renderer(&idx, g(MODEL), "Hair", &[hair], 0, "Hair");
+    assert_eq!((b.source, b.material), (BindSource::PrefabOverride, Some(g(ALT_MAT))));
+    let other = plan.bind_renderer(&idx, g(MODEL), "Body", &[body], 0, "Body");
+    assert_eq!(other.source, BindSource::ExternalObject, "other renderers keep their binding");
+    assert_eq!(plan.extra_materials(g(MODEL), &[hair], 1), vec![(1, g(HAIR_MAT))], "slot 1 of a one-submesh mesh is drawn again");
+    assert!(plan.extra_materials(g(MODEL), &[hair], 2).is_empty());
+    assert!(plan.extra_materials(g(MODEL), &[body], 1).is_empty());
+}
+
+#[test]
+fn overrides_of_things_that_are_not_models_are_counted() {
+    let prefab = prefab_instancing(PREFAB, &[(5, 0, ALT_MAT)]);
+    let idx = index(avatar().asset("dddddddddddddddddddddddddddddddd", "Assets/Shop/Avatar/Prefab/Wrapper.prefab", prefab));
+    let plan = Plan::new(&idx, Some("Assets/Shop/Avatar/Prefab/Wrapper.prefab")).unwrap();
+    assert_eq!(plan.material_overrides, 1);
 }
