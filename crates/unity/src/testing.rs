@@ -260,6 +260,8 @@ pub struct PsdBuilder {
     pub compression: PsdCompression,
     /// Write a negative layer count, so the channel after the color channels is the transparency.
     pub merged_alpha: bool,
+    /// Mark the transparency with an `Mtrn` tagged block instead (layer count stays 0).
+    pub mtrn_block: bool,
     /// `Some(false)` writes the version-info resource of a file saved without Maximize Compatibility.
     pub real_merged: Option<bool>,
     /// PSB (version 2) instead of PSD.
@@ -280,6 +282,7 @@ impl PsdBuilder {
             planes,
             compression: PsdCompression::Raw,
             merged_alpha: alpha,
+            mtrn_block: false,
             real_merged: None,
             psb: false,
             palette: Vec::new(),
@@ -322,6 +325,15 @@ impl PsdBuilder {
             info.extend_from_slice(&0u32.to_be_bytes());
             len(&mut out, info.len() as u64);
             out.extend_from_slice(&info);
+        } else if self.mtrn_block {
+            // Empty layer info and global mask, then the `Mtrn` block with no data.
+            let mut sec = Vec::new();
+            len(&mut sec, 0);
+            sec.extend_from_slice(&0u32.to_be_bytes());
+            sec.extend_from_slice(b"8BIMMtrn");
+            sec.extend_from_slice(&0u32.to_be_bytes());
+            len(&mut out, sec.len() as u64);
+            out.extend_from_slice(&sec);
         } else {
             len(&mut out, 0);
         }

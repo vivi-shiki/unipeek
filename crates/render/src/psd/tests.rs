@@ -39,6 +39,8 @@ fn extra_channel_without_negative_layer_count_is_not_alpha() {
     b.merged_alpha = false;
     let out = decode(&b.build()).unwrap();
     assert_eq!(out.image.get_pixel(1, 1).0[3], 255, "a spot or alpha channel is not the composite's transparency");
+    b.mtrn_block = true;
+    assert_eq!(decode(&b.build()).unwrap().image.get_pixel(1, 1).0[3], 128, "an Mtrn block marks it as transparency");
 }
 
 #[test]

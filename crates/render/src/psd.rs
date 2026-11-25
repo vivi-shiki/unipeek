@@ -46,7 +46,7 @@ pub fn decode(bytes: &[u8]) -> Result<Composite, String> {
     let color_data = r.block(false)?;
     let resources = r.block(false)?;
     let layers = r.block(psb)?;
-    let merged_transparency = layer_count(layers, psb).is_some_and(|n| n < 0);
+    let merged_transparency = layer_count(layers, psb).is_some_and(|n| n < 0) || has_merged_transparency_block(layers);
     if !has_real_merged_data(resources) {
         return Err("no composite image (saved without Maximize Compatibility)".into());
     }
@@ -141,6 +141,12 @@ fn unmatte(c: u8, a: u8) -> u8 {
 
 fn linear_to_srgb(v: f32) -> f32 {
     if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
+}
+
+/// The tagged blocks `Mtrn`, `Mt16` and `Mt32` after the layer info mark a composite with
+/// transparency even when the layer count is positive.
+fn has_merged_transparency_block(section: &[u8]) -> bool {
+    [b"Mtrn", b"Mt16", b"Mt32"].iter().any(|key| section.windows(8).any(|w| (&w[..4] == b"8BIM" || &w[..4] == b"8B64") && &w[4..] == *key))
 }
 
 /// Layer count from the layer info, if the file has one. Negative means the first extra channel
