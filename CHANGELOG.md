@@ -68,6 +68,9 @@ overrides on FBX instances are applied, and normal maps, MatCaps and emission ar
   (skinned meshes through their joints), glTF materials (base color, alpha mode, double-sided, normal and
   emissive textures) and MToon from `VRMC_materials_mtoon` or UniVRM 0.x material properties (shade
   color, world-space outline, MatCap). VRM 0.x models are turned to face +Z.
+- `surface` (Windows): `SurfaceViewport` presents straight into a DirectComposition visual or a child
+  window the host made (`Target`), after a self-test that presents one frame; `ViewportKind::open`
+  falls back to the readback `Viewport` and gives the reason (`UNIPEEK_NO_ZERO_COPY` forces it).
 - `serve::Worker`: the host side of `serve`. Runs the child process, restarts it after it dies or
   times out, and returns an error only for the request that was in flight.
 - Fully transparent thumbnail pixels are always black (they used to keep a little blended color

@@ -233,6 +233,16 @@
 | AI 用的多视角小图 | 224² / 384²（Snowcase P5） |
 | 发 crates.io 0.1 | API 稳定以后 |
 
+### 本库侧完成情况（2026-11-26）
+
+按 Vivi 的决定只做本库能做的部分，Snowcase 侧（`formats` 换库、接入代码）没动：
+
+- [x] 转台帧 `unipeek turn` 和 `render_turntable`；多视角小图 `render_views`（224² / 384²）。
+- [x] 更多 shader：Poiyomi、MToon、Standard 的近似；MatCap、法线贴图（`mikktspace`）、自发光。
+- [x] 更多输入：7z（`sevenz-rust2`）、包中包（最多三层，受大小预算限制）、Unity 工程目录（只看 `Assets/`、`Packages/`，GUID 取自 `.meta`）、glTF / GLB / VRM 0.x 和 1.0。PSD 合成图按决定 2 已在首个版本里。
+- [x] 零拷贝视口：`surface::SurfaceViewport` 画进 DComp visual 或子 HWND，启动自检失败退回读回（`ViewportKind::open`），Windows 代码在 `#[cfg(windows)]` 的 `surface` 模块里。子窗口路径有测试；DComp visual 路径和 preview-lab 的 `overlay` 用的是同一个 wgpu 接口，preview-lab 还没改用它。
+- [ ] 发 crates.io 0.1：等 API 稳定。
+
 ## 待定
 
 - [ ] **仓库何时公开**：最晚在 M3 发 crates.io 之前。

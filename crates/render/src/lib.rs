@@ -11,6 +11,8 @@ pub mod psd;
 pub mod renderer;
 pub mod scene;
 pub mod serve;
+#[cfg(windows)]
+pub mod surface;
 pub mod texture;
 pub mod thumb;
 pub mod viewport;

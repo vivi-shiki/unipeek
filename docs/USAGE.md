@@ -149,6 +149,21 @@ fn drawer(gpu: &unipeek::Gpu) -> Result<(), unipeek::Error> {
 - 不想用 `Viewport` 的加载时，`unipeek::Loading::start(input, opts)` 单独在后台加载，`poll()` 先给 `Loaded::Untextured` 再给 `Loaded::Textured`；`set_scene` 把场景交给视口。
 - 包文件树里某一个 prefab 的缩略图：`source` 写成 `Example.unitypackage#Assets/…/X.prefab`，和商品主图是同一个请求。
 
+### 全屏查看：零拷贝（Windows）
+
+全屏或大窗口时读回太贵，可以让 unipeek 直接画进宿主给的 DirectComposition visual 或者宿主建的子窗口（`HWND`）。创建时会先画一帧自检，失败就退回读回：
+
+```rust,ignore
+let target = unipeek::surface::Target::CompositionVisual(visual_ptr); // 或 Target::Hwnd(child_hwnd)
+match unsafe { unipeek::surface::ViewportKind::open(target, &gpu, w, h) } {
+    unipeek::surface::ViewportKind::ZeroCopy(mut view) => { view.set_scene(&scene); view.render()?; }
+    unipeek::surface::ViewportKind::Readback(mut view, why) => { /* 照详情预览的读回用法，why 写进日志 */ }
+}
+```
+
+- visual 的方式只在 DX12 下可用，宿主在 `resize` 之后要自己 `Commit` DirectComposition 设备；GPUI 的弹出层要压在 3D 层上面时用 gpui-fast 的 native surface，见 preview-lab 的结论。
+- 设环境变量 `UNIPEEK_NO_ZERO_COPY` 可以强制走读回，方便排查驱动问题。
+
 ## 跨包依赖（素体，M5）
 
 Snowcase 不维护词表，从名字认不出衣装适配哪个 Avatar，所以要靠 GUID：unipeek 列出 prefab 用到了但包里没有的 GUID（嵌套的 prefab、网格、材质、材质的主贴图），一次性交给 `Resolver`，Snowcase 告诉它在哪个包。
