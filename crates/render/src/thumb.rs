@@ -85,15 +85,35 @@ impl ImageFormat {
 
 /// Render `scene` into a square RGBA image (straight alpha, sRGB).
 pub fn render_thumbnail(gpu: &Gpu, scene: &Scene, opts: &ThumbOptions) -> Result<image::RgbaImage> {
+    let mut images = render_angles(gpu, scene, opts.size, opts.background, &[opts.view.angles()])?;
+    Ok(images.remove(0))
+}
+
+/// Several views of one scene at one size, sharing the GPU setup: small images for tools that look
+/// at a model from all sides (224² or 384² for image models).
+pub fn render_views(gpu: &Gpu, scene: &Scene, size: u32, background: Background, views: &[View]) -> Result<Vec<image::RgbaImage>> {
+    let angles: Vec<(f32, f32)> = views.iter().map(|v| v.angles()).collect();
+    render_angles(gpu, scene, size, background, &angles)
+}
+
+/// Turntable frames: `frames` evenly spaced turns around the model, starting at the front, seen
+/// slightly from above like the 3/4 view.
+pub fn render_turntable(gpu: &Gpu, scene: &Scene, size: u32, background: Background, frames: u32) -> Result<Vec<image::RgbaImage>> {
+    let pitch = View::ThreeQuarter.angles().1;
+    let n = frames.clamp(1, 360);
+    let angles: Vec<(f32, f32)> = (0..n).map(|i| (std::f32::consts::TAU * i as f32 / n as f32, pitch)).collect();
+    render_angles(gpu, scene, size, background, &angles)
+}
+
+/// Render the scene once per (yaw, pitch), framing the whole model each time.
+fn render_angles(gpu: &Gpu, scene: &Scene, size: u32, background: Background, angles: &[(f32, f32)]) -> Result<Vec<image::RgbaImage>> {
     if scene.is_empty() {
         return Err(Error::NothingToShow(scene.report.input.clone()));
     }
-    let size = opts.size.clamp(1, 8192);
+    let size = size.clamp(1, 8192);
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let mut renderer = Renderer::new(&gpu.device, &gpu.queue, format, scene);
-    renderer.clear = clear_color(opts.background);
-    let mut camera = Orbit::fit(scene.min, scene.max);
-    (camera.yaw, camera.pitch) = opts.view.angles();
+    renderer.clear = clear_color(background);
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("thumbnail"),
         size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
@@ -105,14 +125,20 @@ pub fn render_thumbnail(gpu: &Gpu, scene: &Scene, opts: &ThumbOptions) -> Result
         view_formats: &[],
     });
     let view = target.create_view(&Default::default());
-    let mut enc = gpu.device.create_command_encoder(&Default::default());
-    renderer.render(&gpu.device, &gpu.queue, &mut enc, &view, size, size, &camera);
-    gpu.queue.submit([enc.finish()]);
-    let mut pixels = gpu.read_texture(&target, size, size)?;
-    if opts.background == Background::Transparent {
-        unpremultiply(&mut pixels);
+    let mut images = Vec::with_capacity(angles.len());
+    for &(yaw, pitch) in angles {
+        let mut camera = Orbit::fit(scene.min, scene.max);
+        (camera.yaw, camera.pitch) = (yaw, pitch);
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        renderer.render(&gpu.device, &gpu.queue, &mut enc, &view, size, size, &camera);
+        gpu.queue.submit([enc.finish()]);
+        let mut pixels = gpu.read_texture(&target, size, size)?;
+        if background == Background::Transparent {
+            unpremultiply(&mut pixels);
+        }
+        images.push(image::RgbaImage::from_raw(size, size, pixels).ok_or_else(|| Error::Gpu("readback size mismatch".into()))?);
     }
-    image::RgbaImage::from_raw(size, size, pixels).ok_or_else(|| Error::Gpu("readback size mismatch".into()))
+    Ok(images)
 }
 
 /// The render target's clear color for a background (sRGB bytes to linear).

@@ -14,6 +14,7 @@ const USAGE: &str = "usage:
   unipeek info  <input> [--json] [--with <package or folder>]...
   unipeek ls    <input>
   unipeek thumb <input> -o <out.png|out.webp> [--size 512] [--view front|side|back|3q] [--bg transparent|#rrggbb[aa]] [--timings] [--with <package or folder>]...
+  unipeek turn  <input> -o <folder> [--frames 24] [--size 512] [--format webp|png] [--bg ...] [--with <package or folder>]...
   unipeek view  <input> [--with <package or folder>]...
   unipeek serve
   unipeek version
@@ -120,6 +121,46 @@ fn run(args: &[String]) -> Result<i32, Failure> {
                 print_timings(&report, &mut std::io::stderr());
             }
             Ok(status_code(&report))
+        }
+        "turn" => {
+            let (input, flags) = input_and_flags(rest)?;
+            let (with, flags) = with_sources(flags)?;
+            let (mut frames, mut size, mut background, mut format, mut out) = (24u32, 512u32, Background::Transparent, thumb::ImageFormat::Webp, None);
+            let mut it = flags.iter();
+            while let Some(flag) = it.next() {
+                let mut value = || it.next().ok_or_else(|| Failure::Usage(format!("{flag} needs a value")));
+                match flag.as_str() {
+                    "-o" | "--out" => out = Some(std::path::PathBuf::from(value()?)),
+                    "--frames" => frames = value()?.parse().ok().filter(|n| (1..=360).contains(n)).ok_or_else(|| Failure::Usage("--frames must be 1 to 360".into()))?,
+                    "--size" => size = value()?.parse().map_err(|_| Failure::Usage("--size must be a number".into()))?,
+                    "--bg" => background = Background::parse(value()?).map_err(Failure::Usage)?,
+                    "--format" => {
+                        format = match value()?.as_str() {
+                            "png" => thumb::ImageFormat::Png,
+                            "webp" => thumb::ImageFormat::Webp,
+                            other => return Err(Failure::Usage(format!("--format {other}: expected png or webp"))),
+                        }
+                    }
+                    other => return Err(Failure::Usage(format!("unknown option {other}"))),
+                }
+            }
+            let out = out.ok_or_else(|| Failure::Usage("turn needs -o <folder>".into()))?;
+            let scene = Scene::load(Input::from_location(input), &LoadOptions { max_texture: size.saturating_mul(2).clamp(256, 2048), resolver: with, ..Default::default() })?;
+            let gpu = Gpu::headless()?;
+            let images = thumb::render_turntable(&gpu, &scene, size.clamp(16, 4096), background, frames)?;
+            std::fs::create_dir_all(&out).map_err(unipeek::Error::Io)?;
+            let ext = if format == thumb::ImageFormat::Png { "png" } else { "webp" };
+            for (i, img) in images.iter().enumerate() {
+                let file = out.join(format!("frame_{i:03}.{ext}"));
+                let tmp = out.join(format!("frame_{i:03}.{ext}.tmp"));
+                std::fs::write(&tmp, thumb::encode(img, format)?).map_err(unipeek::Error::Io)?;
+                std::fs::rename(&tmp, &file).map_err(unipeek::Error::Io)?;
+            }
+            eprintln!("wrote {} frame(s) to {}", images.len(), out.display());
+            for d in &scene.report.degrades {
+                eprintln!("degraded: {}", serde_json::to_string(d).unwrap_or_default());
+            }
+            Ok(status_code(&scene.report))
         }
         "view" => {
             let (input, flags) = input_and_flags(rest)?;

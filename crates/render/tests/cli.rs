@@ -107,3 +107,18 @@ fn view_opens_a_window_or_says_why_not() {
     let (code, _, err) = unipeek(&["view"]);
     assert_eq!(code, 64, "{err}");
 }
+
+#[test]
+fn turn_writes_numbered_frames() {
+    let Some(_) = gpu("turn_cli") else { return };
+    let dir = Dir::new("turn");
+    let pkg = dir.file("Quads.unitypackage", &two_quads());
+    let out = dir.0.join("frames");
+    let (code, _, err) = unipeek(&["turn", &pkg, "-o", &out.display().to_string(), "--frames", "3", "--size", "32", "--format", "png"]);
+    assert_eq!(code, 0, "{err}");
+    let mut names: Vec<String> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names, vec!["frame_000.png", "frame_001.png", "frame_002.png"]);
+    let (code, _, _) = unipeek(&["turn", &pkg, "-o", &out.display().to_string(), "--frames", "0"]);
+    assert_eq!(code, 64);
+}

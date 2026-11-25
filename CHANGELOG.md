@@ -49,6 +49,9 @@ overrides on FBX instances are applied.
 - `LoadOptions::resolver`, `write_thumbnail_with`; `--with <package or folder>` (repeatable) for `info`,
   `thumb` and `view`; `"with": [...]` in serve requests. `missing_guids` in serve replies also lists
   materials.
+- `render_turntable` and `unipeek turn <input> -o dir/ [--frames 24]`: turntable frames named
+  `frame_000.webp` and on. `render_views`: several views at one size with one GPU setup, for small
+  multi-view images (224², 384²).
 - `serve::Worker`: the host side of `serve`. Runs the child process, restarts it after it dies or
   times out, and returns an error only for the request that was in flight.
 - Fully transparent thumbnail pixels are always black (they used to keep a little blended color

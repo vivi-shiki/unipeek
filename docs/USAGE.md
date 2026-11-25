@@ -111,6 +111,7 @@ opt-level = 3
 unipeek info  <输入> [--json] [--with <包或文件夹>]...   # 报告，不需要 GPU
 unipeek ls    <输入>                 # 包里的文件
 unipeek thumb <输入> -o out.webp [--size 512] [--view 3q] [--bg transparent] [--timings]
+unipeek turn  <输入> -o 文件夹/ [--frames 24] [--size 512] [--format webp|png]   # 转台帧 frame_000.webp …
 unipeek view  <输入>                 # 独立窗口：左键转，右键或中键平移，滚轮缩放，R 复位，1-4 视角
 unipeek serve
 unipeek version

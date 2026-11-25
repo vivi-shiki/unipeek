@@ -225,3 +225,17 @@ fn one_prefab_inside_a_package_by_its_path() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(red_left > 100 && red_left_inner == 0 && blue_left_inner > 100, "{red_left} {red_left_inner} {blue_left_inner}");
 }
+
+#[test]
+fn turntable_and_view_sets_share_one_setup() {
+    let Some(gpu) = gpu("turntable") else { return };
+    let scene = Scene::load(input(two_quads()), &LoadOptions::default()).unwrap();
+    let frames = thumb::render_turntable(&gpu, &scene, 64, Background::Transparent, 4).unwrap();
+    assert_eq!(frames.len(), 4);
+    assert_ne!(frames[0], frames[1], "the model turns");
+    let views = thumb::render_views(&gpu, &scene, 224, Background::Transparent, &[View::Front, View::Side, View::Back, View::ThreeQuarter]).unwrap();
+    assert_eq!(views.len(), 4);
+    assert!(views.iter().all(|v| v.dimensions() == (224, 224)));
+    let single = thumb::render_thumbnail(&gpu, &scene, &ThumbOptions { size: 224, view: View::Side, background: Background::Transparent }).unwrap();
+    assert_eq!(views[1], single, "a view set renders the same pixels as single thumbnails");
+}
