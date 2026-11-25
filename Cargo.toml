@@ -8,7 +8,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/vivi-shiki/unipeek"
 homepage = "https://github.com/vivi-shiki/unipeek"
-rust-version = "1.89"
+rust-version = "1.93"
 
 [workspace.dependencies]
 unipeek = { path = "crates/render", version = "=0.1.0-alpha.2" }
@@ -27,6 +27,7 @@ tar = { version = "0.4.46", default-features = false }
 flate2 = "1.1.11"
 zip = { version = "9.8", default-features = false, features = ["deflate-flate2"] }
 encoding_rs = "0.8.44"
+sevenz-rust2 = { version = "0.25.0", default-features = false }
 mikktspace = { version = "0.3", default-features = false, features = ["glam"] }
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 

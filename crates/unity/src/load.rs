@@ -1,35 +1,46 @@
-//! Open any supported input (unitypackage, zip, folder, single FBX) as a `PackageIndex`.
+//! Open any supported input (unitypackage, zip, 7z, folder, Unity project, single FBX) as a `PackageIndex`.
 //!
-//! Zips and folders without a `.unitypackage` become a "loose" index: each FBX or image gets a
-//! GUID derived from its path, so planning and binding work the same way for every container.
+//! Archives and folders without a `.unitypackage` become a "loose" index. A file with a `.meta`
+//! next to it (an unpacked Unity project) keeps the GUID from its `.meta`; any other FBX or image
+//! gets a GUID derived from its path, so planning and binding work the same for every container.
 use crate::{
     AssetKind, Entry, Error, Guid, IndexOptions, Input, PackageIndex, Result, Source,
+    archive::{Archive, ArchiveData, Format, Member},
     package::{kind_from_extension, normalize_path, sniff},
     source::is_container,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::{self, Read, Seek},
+    io::{self, Read},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 /// Folders deeper than this are not searched; real item folders are shallow.
 const MAX_DEPTH: usize = 8;
+/// Unity projects nest deeper (`Assets/Shop/Item/Variant/Textures/...`).
+const PROJECT_DEPTH: usize = 16;
+/// Archives inside archives are followed this many levels deep.
+const MAX_NESTING: usize = 3;
+/// A `.meta` larger than this is not a Unity `.meta`.
+const MAX_META: u64 = 1 << 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Container {
     UnityPackage,
     Zip,
+    SevenZ,
     Folder,
+    /// A Unity project folder (or archive of one): `Assets/` and `Packages/` with their `.meta` files.
+    Project,
     Model,
 }
 
 pub struct Package {
     pub index: PackageIndex,
     pub container: Container,
-    /// The `.unitypackage` picked inside a zip or folder.
+    /// The `.unitypackage` (or nested archive chain, joined with `#`) picked inside an archive or folder.
     pub member: Option<String>,
     origin: Origin,
     /// Packages merged in through a `Resolver`, with the GUIDs each one supplied.
@@ -39,63 +50,17 @@ pub struct Package {
 enum Origin {
     /// A unitypackage source. One-shot readers were indexed with their binaries kept.
     Package(Source),
-    ZipMember { zip: ZipData, index: usize },
+    Member { archive: Archive, member: Member },
     /// Loose files whose bytes were kept while indexing.
     Kept,
     Files(BTreeMap<Guid, PathBuf>),
-}
-
-#[derive(Clone)]
-enum ZipData {
-    Path(PathBuf),
-    Bytes(Arc<[u8]>),
-}
-
-trait ReadSeek: Read + Seek + Send {}
-impl<T: Read + Seek + Send> ReadSeek for T {}
-
-impl ZipData {
-    fn archive(&self) -> Result<zip::ZipArchive<Box<dyn ReadSeek>>> {
-        let reader: Box<dyn ReadSeek> = match self {
-            ZipData::Path(p) => Box::new(io::BufReader::new(std::fs::File::open(p)?)),
-            ZipData::Bytes(b) => Box::new(io::Cursor::new(b.clone())),
-        };
-        zip::ZipArchive::new(reader).map_err(|e| Error::Unsupported(format!("unreadable zip: {e}")))
-    }
 }
 
 impl Package {
     /// Open an input and index the package it points at.
     /// Returns the inner path left for `Plan::new` (a prefab or model inside the package).
     pub fn open(input: Input, opts: &IndexOptions) -> Result<(Package, Option<String>)> {
-        let Input { source, inner } = input;
-        let mut inner = inner.into_iter();
-        if let Source::Path(p) = &source
-            && p.is_dir()
-        {
-            return Ok((open_folder(p, opts)?, inner.next()));
-        }
-        let (head, source) = peek(source)?;
-        match detect(&head, &source) {
-            Some(Detected::UnityPackage) => {
-                let index = index_source(source, opts)?;
-                Ok((Package { index: index.0, container: Container::UnityPackage, member: None, origin: Origin::Package(index.1), deps: Vec::new() }, inner.next()))
-            }
-            Some(Detected::Zip) => {
-                let zip = match source {
-                    Source::Path(p) => ZipData::Path(p),
-                    Source::Bytes(b) => ZipData::Bytes(b),
-                    mut other => {
-                        let mut bytes = Vec::new();
-                        other.open()?.read_to_end(&mut bytes)?;
-                        ZipData::Bytes(Arc::from(bytes))
-                    }
-                };
-                open_zip(zip, &mut inner, opts)
-            }
-            Some(Detected::Model) => Ok((open_model(source, opts)?, inner.next())),
-            None => Err(Error::Unsupported(format!("{} is not a unitypackage, zip, folder or FBX", source.describe()))),
-        }
+        open_nested(input, opts, 0)
     }
 
     /// Bytes of FBX and texture assets, reading the input again when needed. Assets that came from
@@ -158,10 +123,9 @@ impl Package {
         match &mut self.origin {
             Origin::Package(source) if source.reopenable() => self.index.read_assets(source.open()?, wanted),
             Origin::Package(_) | Origin::Kept => self.index.read_assets(io::empty(), wanted),
-            Origin::ZipMember { zip, index } => {
-                let mut archive = zip.archive()?;
-                let member = archive.by_index(*index).map_err(|e| Error::Unsupported(format!("zip member: {e}")))?;
-                self.index.read_assets(member, wanted)
+            Origin::Member { archive, member } => {
+                let index = &mut self.index;
+                archive.with_member(member, |r| index.read_assets(r, wanted))
             }
             Origin::Files(files) => {
                 let mut out = BTreeMap::new();
@@ -174,11 +138,46 @@ impl Package {
             }
         }
     }
+
+    fn new(index: PackageIndex, container: Container, member: Option<String>, origin: Origin) -> Package {
+        Package { index, container, member, origin, deps: Vec::new() }
+    }
+}
+
+fn open_nested(input: Input, opts: &IndexOptions, depth: usize) -> Result<(Package, Option<String>)> {
+    let Input { source, inner } = input;
+    let mut inner = inner.into_iter();
+    if let Source::Path(p) = &source
+        && p.is_dir()
+    {
+        return open_folder(p, &mut inner, opts, depth);
+    }
+    let (head, source) = peek(source)?;
+    match detect(&head, &source) {
+        Some(Detected::UnityPackage) => {
+            let (index, source) = index_source(source, opts)?;
+            Ok((Package::new(index, Container::UnityPackage, None, Origin::Package(source)), inner.next()))
+        }
+        Some(Detected::Archive(format)) => {
+            let data = match source {
+                Source::Path(p) => ArchiveData::Path(p),
+                Source::Bytes(b) => ArchiveData::Bytes(b),
+                mut other => {
+                    let mut bytes = Vec::new();
+                    other.open()?.read_to_end(&mut bytes)?;
+                    ArchiveData::Bytes(Arc::from(bytes))
+                }
+            };
+            open_archive(Archive { data, format }, &mut inner, opts, depth)
+        }
+        Some(Detected::Model) => Ok((open_model(source, opts)?, inner.next())),
+        None => Err(Error::Unsupported(format!("{} is not a unitypackage, zip, 7z, folder or FBX", source.describe()))),
+    }
 }
 
 enum Detected {
     UnityPackage,
-    Zip,
+    Archive(Format),
     Model,
 }
 
@@ -205,7 +204,10 @@ fn detect(head: &[u8], source: &Source) -> Option<Detected> {
         return Some(Detected::UnityPackage);
     }
     if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
-        return Some(Detected::Zip);
+        return Some(Detected::Archive(Format::Zip));
+    }
+    if head.starts_with(b"7z\xbc\xaf\x27\x1c") {
+        return Some(Detected::Archive(Format::SevenZ));
     }
     if sniff(head) == AssetKind::Fbx {
         return Some(Detected::Model);
@@ -213,7 +215,8 @@ fn detect(head: &[u8], source: &Source) -> Option<Detected> {
     let Source::Path(p) = source else { return None };
     match p.extension()?.to_str()?.to_ascii_lowercase().as_str() {
         "unitypackage" => Some(Detected::UnityPackage),
-        "zip" => Some(Detected::Zip),
+        "zip" => Some(Detected::Archive(Format::Zip)),
+        "7z" => Some(Detected::Archive(Format::SevenZ)),
         "fbx" => Some(Detected::Model),
         _ => None,
     }
@@ -225,64 +228,119 @@ fn index_source(mut source: Source, opts: &IndexOptions) -> Result<(PackageIndex
     Ok((index, source))
 }
 
-fn open_zip(zip: ZipData, inner: &mut impl Iterator<Item = String>, opts: &IndexOptions) -> Result<(Package, Option<String>)> {
-    let mut archive = zip.archive()?;
-    let mut members = Vec::new();
-    for i in 0..archive.len() {
-        let Ok(f) = archive.by_index_raw(i) else { continue };
-        if !f.is_dir() {
-            members.push((i, decode_name(f.name_raw()), f.size()));
-        }
-    }
-    let first = inner.next();
-    let chosen = match &first {
-        Some(seg) if is_container(seg) => {
-            let want = normalize_path(seg);
-            let found = members.iter().find(|(_, n, _)| normalize_path(n) == want).ok_or_else(|| Error::NotFound(format!("{seg} is not in the zip")))?;
-            if !found.1.to_ascii_lowercase().ends_with(".unitypackage") {
-                return Err(Error::Unsupported(format!("nested zip {seg}")));
-            }
-            Some(found.clone())
-        }
-        _ => members.iter().filter(|(_, n, _)| n.to_ascii_lowercase().ends_with(".unitypackage")).max_by_key(|(_, _, size)| *size).cloned(),
-    };
-    if let Some((i, name, _)) = chosen {
-        let member = archive.by_index(i).map_err(|e| Error::Unsupported(format!("zip member {name}: {e}")))?;
-        let opts = IndexOptions { keep_binaries: false, ..opts.clone() };
-        let index = PackageIndex::read(member, &opts)?;
-        let next = if first.as_deref().is_some_and(is_container) { inner.next() } else { first };
-        let pkg = Package { index, container: Container::Zip, member: Some(name), origin: Origin::ZipMember { zip, index: i }, deps: Vec::new() };
-        return Ok((pkg, next));
-    }
-    let mut entries = Vec::new();
-    let mut kept = 0u64;
-    for (i, name, size) in members {
-        let Some(kind) = loose_kind(&name) else { continue };
-        let mut bytes = Vec::new();
-        if kept + size <= opts.max_binary_bytes {
-            let mut f = archive.by_index(i).map_err(|e| Error::Unsupported(format!("zip member {name}: {e}")))?;
-            f.read_to_end(&mut bytes)?;
-            kept += size;
-        }
-        let kind = match sniff(&bytes) {
-            AssetKind::Other => kind,
-            sniffed => sniffed,
-        };
-        entries.push(Entry::loose(name, size, kind, (!bytes.is_empty()).then(|| Arc::from(bytes))));
-    }
-    let pkg = Package { index: PackageIndex::from_loose(entries), container: Container::Zip, member: None, origin: Origin::Kept, deps: Vec::new() };
-    Ok((pkg, first))
+fn is_archive(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".zip") || lower.ends_with(".7z")
 }
 
-fn open_folder(dir: &Path, opts: &IndexOptions) -> Result<Package> {
-    let files = walk(dir);
-    let packages = files.iter().filter(|(rel, _, _)| rel.to_ascii_lowercase().ends_with(".unitypackage"));
+fn is_unitypackage(name: &str) -> bool {
+    name.to_ascii_lowercase().ends_with(".unitypackage")
+}
+
+fn open_archive(archive: Archive, inner: &mut impl Iterator<Item = String>, opts: &IndexOptions, depth: usize) -> Result<(Package, Option<String>)> {
+    let container = if archive.format == Format::Zip { Container::Zip } else { Container::SevenZ };
+    let members = archive.members()?;
+    let first = inner.next();
+    let named = first.as_deref().filter(|s| is_container(s));
+    let chosen = match named {
+        Some(seg) => {
+            let want = normalize_path(seg);
+            Some(members.iter().find(|m| normalize_path(&m.name) == want).cloned().ok_or_else(|| Error::NotFound(format!("{seg} is not in the archive")))?)
+        }
+        None => {
+            let largest = |pick: &dyn Fn(&str) -> bool| members.iter().filter(|m| pick(&m.name) && !in_library(&m.name)).max_by_key(|m| m.size).cloned();
+            // A shop zip holds the unitypackage; a zip of zips holds it one level down. Loose
+            // models win over nested archives so a project archive is read as a project.
+            largest(&is_unitypackage).or_else(|| if members.iter().any(|m| loose_kind(&m.name) == Some(AssetKind::Fbx)) { None } else { largest(&is_archive) })
+        }
+    };
+    let rest = if named.is_some() { inner.next() } else { first };
+    if let Some(member) = chosen {
+        if is_unitypackage(&member.name) {
+            let index = archive.with_member(&member, |r| PackageIndex::read(r, &IndexOptions { keep_binaries: false, ..opts.clone() }))?;
+            let name = member.name.clone();
+            return Ok((Package::new(index, container, Some(name), Origin::Member { archive, member }), rest));
+        }
+        if !is_archive(&member.name) {
+            return Err(Error::Unsupported(format!("{} is not a unitypackage or archive", member.name)));
+        }
+        if depth + 1 >= MAX_NESTING {
+            return Err(Error::Unsupported(format!("{} is nested more than {MAX_NESTING} archives deep", member.name)));
+        }
+        if member.size > opts.max_binary_bytes {
+            return Err(Error::Unsupported(format!("nested archive {} is larger than {} bytes", member.name, opts.max_binary_bytes)));
+        }
+        let bytes = archive.with_member(&member, |r| {
+            let mut b = Vec::with_capacity(member.size as usize);
+            r.take(opts.max_binary_bytes).read_to_end(&mut b)?;
+            Ok(b)
+        })?;
+        let mut nested = Input::new(Source::Bytes(Arc::from(bytes)));
+        nested.inner = rest.into_iter().chain(inner.by_ref()).collect();
+        let (mut pkg, left) = open_nested(nested, opts, depth + 1)?;
+        pkg.member = Some(match pkg.member.take() {
+            Some(m) => format!("{}#{m}", member.name),
+            None => member.name.clone(),
+        });
+        return Ok((pkg, left));
+    }
+
+    // Loose files: keep `.meta`, Unity YAML and, within the budget, models and images.
+    let mut files = Vec::new();
+    let mut kept = 0u64;
+    let wanted = |m: &Member| !in_library(&m.name) && (is_meta(&m.name) || loose_kind(&m.name).is_some());
+    archive.each(wanted, |m, r| {
+        let keep = match loose_kind(&m.name) {
+            _ if is_meta(&m.name) => m.size <= MAX_META,
+            Some(AssetKind::Yaml | AssetKind::Shader) => m.size <= opts.max_text_bytes,
+            Some(_) => kept + m.size <= opts.max_binary_bytes,
+            None => false,
+        };
+        let mut bytes = Vec::new();
+        if keep {
+            r.read_to_end(&mut bytes)?;
+            if !is_meta(&m.name) && matches!(loose_kind(&m.name), Some(AssetKind::Fbx | AssetKind::Png | AssetKind::Jpeg | AssetKind::Psd)) {
+                kept += m.size;
+            }
+        }
+        files.push(LooseFile { rel: m.name.clone(), size: m.size, bytes: keep.then_some(bytes), path: None });
+        Ok(())
+    })?;
+    let (index, _, project) = loose_index(files);
+    let container = if project { Container::Project } else { container };
+    Ok((Package::new(index, container, None, Origin::Kept), rest))
+}
+
+fn open_folder(dir: &Path, inner: &mut impl Iterator<Item = String>, opts: &IndexOptions, depth: usize) -> Result<(Package, Option<String>)> {
+    if dir.join("Assets").is_dir() && (dir.join("ProjectSettings").is_dir() || dir.join("Packages").is_dir()) {
+        // A Unity project: only `Assets/` and `Packages/` hold assets; `Library/` is a cache.
+        let mut files = Vec::new();
+        for top in ["Assets", "Packages"] {
+            files.extend(walk_limited(&dir.join(top), PROJECT_DEPTH).into_iter().map(|(rel, p, s)| (format!("{top}/{rel}"), p, s)));
+        }
+        let (index, map, _) = loose_index(read_loose(files, opts));
+        return Ok((Package::new(index, Container::Project, None, Origin::Files(map)), inner.next()));
+    }
+    let files = walk_limited(dir, MAX_DEPTH);
+    let packages = files.iter().filter(|(rel, _, _)| is_unitypackage(rel));
     if let Some((rel, path, _)) = packages.max_by_key(|(_, _, size)| *size) {
         let (index, source) = index_source(Source::Path(path.clone()), opts)?;
-        return Ok(Package { index, container: Container::Folder, member: Some(rel.clone()), origin: Origin::Package(source), deps: Vec::new() });
+        return Ok((Package::new(index, Container::Folder, Some(rel.clone()), Origin::Package(source)), inner.next()));
     }
-    let (index, map) = loose_files(files);
-    Ok(Package { index, container: Container::Folder, member: None, origin: Origin::Files(map), deps: Vec::new() })
+    let has_models = files.iter().any(|(rel, _, _)| loose_kind(rel) == Some(AssetKind::Fbx));
+    if !has_models && let Some((rel, path, _)) = files.iter().filter(|(rel, _, _)| is_archive(rel)).max_by_key(|(_, _, size)| *size) {
+        let mut nested = Input::new(Source::Path(path.clone()));
+        nested.inner = inner.collect();
+        let (mut pkg, left) = open_nested(nested, opts, depth)?;
+        pkg.member = Some(match pkg.member.take() {
+            Some(m) => format!("{rel}#{m}"),
+            None => rel.clone(),
+        });
+        return Ok((pkg, left));
+    }
+    let (index, map, project) = loose_index(read_loose(files, opts));
+    let container = if project { Container::Project } else { Container::Folder };
+    Ok((Package::new(index, container, None, Origin::Files(map)), inner.next()))
 }
 
 fn open_model(source: Source, opts: &IndexOptions) -> Result<Package> {
@@ -292,53 +350,121 @@ fn open_model(source: Source, opts: &IndexOptions) -> Result<Package> {
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "model.fbx".into());
             let size = std::fs::metadata(&path)?.len();
             // Textures sit next to the model or in a subfolder such as `Textures/`.
-            let mut files: Vec<_> = walk_limited(&dir, 3).into_iter().filter(|(_, p, _)| p != &path && loose_kind(&p.to_string_lossy()).is_some_and(|k| k != AssetKind::Fbx)).collect();
+            let mut files: Vec<_> = walk_limited(&dir, 3)
+                .into_iter()
+                .filter(|(_, p, _)| p != &path && loose_kind(&p.to_string_lossy()).is_some_and(|k| matches!(k, AssetKind::Png | AssetKind::Jpeg | AssetKind::Psd)))
+                .collect();
             files.push((name, path, size));
-            let (index, map) = loose_files(files);
-            Ok(Package { index, container: Container::Model, member: None, origin: Origin::Files(map), deps: Vec::new() })
+            let (index, map, _) = loose_index(read_loose(files, opts));
+            Ok(Package::new(index, Container::Model, None, Origin::Files(map)))
         }
         mut other => {
             let mut bytes = Vec::new();
             other.open()?.take(opts.max_binary_bytes).read_to_end(&mut bytes)?;
             let entry = Entry::loose("model.fbx".into(), bytes.len() as u64, AssetKind::Fbx, Some(Arc::from(bytes)));
-            Ok(Package { index: PackageIndex::from_loose(vec![entry]), container: Container::Model, member: None, origin: Origin::Kept, deps: Vec::new() })
+            Ok(Package::new(PackageIndex::from_loose(vec![entry]), Container::Model, None, Origin::Kept))
         }
     }
 }
 
-fn loose_files(files: Vec<(String, PathBuf, u64)>) -> (PackageIndex, BTreeMap<Guid, PathBuf>) {
+/// A file of a folder or archive. `bytes` is what was read while listing (`.meta`, Unity YAML,
+/// kept binaries); `path` is where a folder's file can be read later.
+struct LooseFile {
+    rel: String,
+    size: u64,
+    bytes: Option<Vec<u8>>,
+    path: Option<PathBuf>,
+}
+
+/// Folder files: read `.meta` files and Unity YAML now, models and images when they are needed.
+fn read_loose(files: Vec<(String, PathBuf, u64)>, opts: &IndexOptions) -> Vec<LooseFile> {
+    files
+        .into_iter()
+        .filter(|(rel, _, _)| is_meta(rel) || loose_kind(rel).is_some())
+        .map(|(rel, path, size)| {
+            let small = if is_meta(&rel) { size <= MAX_META } else { matches!(loose_kind(&rel), Some(AssetKind::Yaml | AssetKind::Shader)) && size <= opts.max_text_bytes };
+            let bytes = if small { std::fs::read(&path).ok() } else { None };
+            LooseFile { rel, size, bytes, path: Some(path) }
+        })
+        .collect()
+}
+
+/// Build an index from loose files. Returns it, where to read each file, and whether `.meta`
+/// files gave GUIDs (an unpacked Unity project).
+fn loose_index(files: Vec<LooseFile>) -> (PackageIndex, BTreeMap<Guid, PathBuf>, bool) {
+    let mut metas: BTreeMap<String, String> = BTreeMap::new();
+    let mut assets = Vec::new();
+    for f in files {
+        match f.rel.strip_suffix(".meta") {
+            Some(asset) => {
+                if let Some(b) = &f.bytes {
+                    metas.insert(normalize_path(asset), String::from_utf8_lossy(b).into_owned());
+                }
+            }
+            None => assets.push(f),
+        }
+    }
     let mut entries = Vec::new();
-    let mut map = BTreeMap::new();
-    for (rel, path, size) in files {
-        let Some(kind) = loose_kind(&rel) else { continue };
-        let e = Entry::loose(rel, size, kind, None);
-        map.insert(e.guid, path);
+    let mut paths = BTreeMap::new();
+    let mut from_meta = false;
+    for f in assets {
+        let Some(by_name) = loose_kind(&f.rel) else { continue };
+        let kind = match f.bytes.as_deref().map(sniff) {
+            Some(AssetKind::Other) | None => by_name,
+            Some(sniffed) => sniffed,
+        };
+        let meta = metas.get(&normalize_path(&f.rel));
+        let guid = meta.and_then(|m| crate::meta::Meta::parse(m).guid);
+        let mut e = Entry::loose(project_path(&f.rel), f.size, kind, None);
+        if let Some(g) = guid {
+            e.guid = g;
+            from_meta = true;
+        }
+        e.meta = meta.map(|m| Arc::from(m.as_str()));
+        e.has_meta = meta.is_some();
+        match (kind, f.bytes) {
+            (AssetKind::Yaml, Some(b)) => e.text = Some(Arc::from(String::from_utf8_lossy(&b).as_ref())),
+            (AssetKind::Shader, Some(b)) => e.shader_name = crate::package::shader_name(&String::from_utf8_lossy(&b)),
+            (_, Some(b)) if !b.is_empty() => e.bytes = Some(Arc::from(b)),
+            _ => {}
+        }
+        if let Some(p) = f.path {
+            paths.insert(e.guid, p);
+        }
         entries.push(e);
     }
-    (PackageIndex::from_loose(entries), map)
+    (PackageIndex::from_loose(entries), paths, from_meta)
+}
+
+/// `Assets/...` or `Packages/...` when the path is inside a Unity project, the path as is otherwise.
+fn project_path(rel: &str) -> String {
+    let parts: Vec<&str> = rel.split('/').collect();
+    match parts.iter().position(|p| *p == "Assets" || *p == "Packages") {
+        Some(i) if i > 0 => parts[i..].join("/"),
+        _ => rel.to_string(),
+    }
+}
+
+fn is_meta(path: &str) -> bool {
+    path.to_ascii_lowercase().ends_with(".meta")
+}
+
+fn in_library(path: &str) -> bool {
+    let normalized = normalize_path(path);
+    normalized.starts_with("library/") || normalized.contains("/library/")
 }
 
 /// Kind of a loose file worth indexing, by extension. Files under Unity's `Library/` are skipped.
 fn loose_kind(path: &str) -> Option<AssetKind> {
-    let normalized = normalize_path(path);
-    if normalized.starts_with("library/") || normalized.contains("/library/") {
+    if in_library(path) {
         return None;
     }
+    let normalized = normalize_path(path);
     let ext = normalized.rsplit_once('.')?.1;
-    kind_from_extension(ext).filter(|k| matches!(k, AssetKind::Fbx | AssetKind::Png | AssetKind::Jpeg | AssetKind::Psd))
-}
-
-/// Zip names are UTF-8 when valid, otherwise Shift-JIS (Japanese tools do not set the UTF-8 flag).
-fn decode_name(raw: &[u8]) -> String {
-    let name = match std::str::from_utf8(raw) {
-        Ok(s) => s.to_string(),
-        Err(_) => encoding_rs::SHIFT_JIS.decode(raw).0.into_owned(),
-    };
-    name.replace('\\', "/")
-}
-
-fn walk(dir: &Path) -> Vec<(String, PathBuf, u64)> {
-    walk_limited(dir, MAX_DEPTH)
+    match ext {
+        "prefab" | "mat" => Some(AssetKind::Yaml),
+        _ => kind_from_extension(ext).filter(|k| matches!(k, AssetKind::Fbx | AssetKind::Png | AssetKind::Jpeg | AssetKind::Psd | AssetKind::Shader)),
+    }
 }
 
 /// Files under `dir` as (relative path with `/`, full path, size), skipping `Library/` and dot folders.

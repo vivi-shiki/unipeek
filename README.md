@@ -29,7 +29,7 @@ Model files are never committed. Pass the paths on the command line.
 
 ## Run
 
-`<input>` is a `.unitypackage`, `.zip`, folder or `.fbx`, optionally followed by `#<path inside>`.
+`<input>` is a `.unitypackage`, `.zip`, `.7z`, folder, Unity project or `.fbx`, optionally followed by `#<path inside>`.
 
 ```
 cargo run --release -p unipeek -- info  <input> [--json]

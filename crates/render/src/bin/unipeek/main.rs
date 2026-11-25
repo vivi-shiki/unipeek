@@ -19,7 +19,7 @@ const USAGE: &str = "usage:
   unipeek serve
   unipeek version
 
-<input> is a .unitypackage, .zip, folder or .fbx, optionally followed by #<path inside>,
+<input> is a .unitypackage, .zip, .7z, folder, Unity project or .fbx, optionally followed by #<path inside>,
 e.g. Avatar.unitypackage#Assets/Shop/Avatar.prefab";
 
 fn main() -> ExitCode {

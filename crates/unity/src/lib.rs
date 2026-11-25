@@ -1,4 +1,5 @@
 //! GPU-free half of unipeek: reads Unity asset packages and works out what should be shown.
+mod archive;
 pub mod error;
 pub mod fileid;
 pub mod guid;

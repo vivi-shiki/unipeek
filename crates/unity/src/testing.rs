@@ -403,3 +403,12 @@ fn pack_bits(row: &[u8]) -> Vec<u8> {
     }
     out
 }
+
+/// A 7z archive with one compressed stream per file (LZMA2), names as given.
+pub fn sevenz(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut w = sevenz_rust2::ArchiveWriter::new(std::io::Cursor::new(Vec::new())).expect("7z writer");
+    for (name, data) in entries {
+        w.push_archive_entry(sevenz_rust2::ArchiveEntry::new_file(name), Some(*data)).expect("7z entry");
+    }
+    w.finish().expect("7z finish").into_inner()
+}

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     AssetKind, Plan, Source,
-    testing::{FBX_BINARY_MAGIC, PNG_MAGIC, PackageBuilder, model_meta, prefab_instancing, zip, zip_with_flags},
+    testing::{FBX_BINARY_MAGIC, PNG_MAGIC, PackageBuilder, model_meta, prefab_instancing, sevenz, zip, zip_with_flags},
 };
 use std::{path::PathBuf, sync::Arc};
 
@@ -163,16 +163,96 @@ fn unsupported_and_missing_inputs() {
 }
 
 #[test]
-fn nested_and_encrypted_zips_are_unsupported() {
-    let inner = zip(&[(b"a.fbx", &fbx(10), true)]);
-    let outer = zip(&[(b"Item/inner.zip", &inner, true)]);
-    let mut input = Input::from_location("x/Outer.zip#Item/inner.zip");
-    input.source = Source::Bytes(Arc::from(outer));
-    let err = Package::open(input, &IndexOptions::default()).err().unwrap();
-    assert!(matches!(err, crate::Error::Unsupported(_)), "{err}");
+fn nested_archives_are_followed_and_encrypted_ones_are_unsupported() {
+    let inner = zip(&[(b"Pkg/Avatar.unitypackage", &small_package(), true)]);
+    let outer = zip(&[(b"Item/inner.zip", &inner, true), (b"Item/readme.txt", b"hi", true)]);
+    // By path, and found on its own because the outer zip has nothing else to show.
+    for location in ["x/Outer.zip#Item/inner.zip#Pkg/Avatar.unitypackage#Assets/A/Avatar.prefab", "x/Outer.zip"] {
+        let mut input = Input::from_location(location);
+        input.source = Source::Bytes(Arc::from(outer.clone()));
+        let (mut pkg, left) = Package::open(input, &IndexOptions::default()).unwrap();
+        assert_eq!(pkg.member.as_deref(), Some("Item/inner.zip#Pkg/Avatar.unitypackage"), "{location}");
+        assert_eq!(left.is_some(), location.ends_with(".prefab"));
+        assert_eq!(all_bytes(&mut pkg)[&Guid::parse(MODEL).unwrap()].len(), 600);
+    }
+    // Three archives deep is the limit.
+    let deeper = zip(&[(b"a.zip", &zip(&[(b"b.zip", &outer, true)]), true)]);
+    let err = Package::open(Input::new(Source::Bytes(Arc::from(deeper))), &IndexOptions::default()).err().unwrap();
+    assert!(err.to_string().contains("nested"), "{err}");
+    // A nested archive larger than the binary budget is refused, not read.
+    let small_budget = IndexOptions { max_binary_bytes: 100, ..IndexOptions::default() };
+    let err = Package::open(Input::new(Source::Bytes(Arc::from(outer.clone()))), &small_budget).err().unwrap();
+    assert!(err.to_string().contains("larger"), "{err}");
 
     let locked = zip_with_flags(&[(b"Item/Avatar.unitypackage", &small_package(), 0x0001)]);
     let err = Package::open(Input::new(Source::Bytes(Arc::from(locked))), &IndexOptions::default()).err().unwrap();
     assert!(matches!(err, crate::Error::Unsupported(_)), "{err}");
     assert!(err.to_string().to_lowercase().contains("password") || err.to_string().to_lowercase().contains("encrypt"), "{err}");
+}
+
+#[test]
+fn sevenz_with_a_unitypackage_or_loose_files() {
+    let archive = sevenz(&[("Item/readme.txt", b"hi"), ("Item/Avatar.unitypackage", &small_package())]);
+    let dir = TempDir::new("7z");
+    let path = dir.write("Item.7z", &archive);
+    let (mut pkg, inner) = Package::open(Input::from_location(&format!("{}#Item/Avatar.unitypackage#Assets/A/Avatar.prefab", path.display())), &IndexOptions::default()).unwrap();
+    assert_eq!((pkg.container, pkg.member.as_deref(), inner.as_deref()), (Container::SevenZ, Some("Item/Avatar.unitypackage"), Some("Assets/A/Avatar.prefab")));
+    assert_eq!(all_bytes(&mut pkg)[&Guid::parse(MODEL).unwrap()].len(), 600, "read again from the 7z");
+
+    let loose = sevenz(&[("Model/Avatar.fbx", &fbx(70)), ("Model/Avatar_Hair.png", PNG_MAGIC)]);
+    let (mut pkg, _) = Package::open(Input::new(Source::Bytes(Arc::from(loose))), &IndexOptions::default()).unwrap();
+    assert_eq!(pkg.container, Container::SevenZ);
+    let plan = Plan::new(&pkg.index, None).unwrap();
+    assert_eq!(plan.models[0].path, "Model/Avatar.fbx");
+    assert_eq!(all_bytes(&mut pkg)[&plan.models[0].guid].len(), 70);
+    let err = Package::open(Input::new(Source::Bytes(Arc::from(&b"7z\xbc\xaf\x27\x1c broken"[..]))), &IndexOptions::default()).err().unwrap();
+    assert!(matches!(err, crate::Error::Unsupported(_)), "{err}");
+}
+
+/// A Unity project: assets with `.meta` files under `Assets/`, plus folders that must be ignored.
+fn project_files() -> Vec<(&'static str, Vec<u8>)> {
+    let mat = crate::testing::material_yaml("Body", "df12117ecd77c31469c224178886498e", 4800000, Some(OTHER), -1);
+    let meta = |g: &str| format!("fileFormatVersion: 2\nguid: {g}\n").into_bytes();
+    vec![
+        ("Assets/Shop/Avatar.fbx", fbx(500)),
+        ("Assets/Shop/Avatar.fbx.meta", model_meta(MODEL, &[("Body", "c5898e34be6905c45a38f3f063d0172d")]).into_bytes()),
+        ("Assets/Shop/Body.mat", mat.into_bytes()),
+        ("Assets/Shop/Body.mat.meta", meta("c5898e34be6905c45a38f3f063d0172d")),
+        ("Assets/Shop/Body.png", PNG_MAGIC.to_vec()),
+        ("Assets/Shop/Body.png.meta", meta(OTHER)),
+        ("Assets/Shop/Avatar.prefab", prefab_instancing(MODEL, &[]).into_bytes()),
+        ("Assets/Shop/Avatar.prefab.meta", meta(PREFAB)),
+        ("ProjectSettings/ProjectVersion.txt", b"m_EditorVersion: 2022.3.22f1".to_vec()),
+        ("Library/Artifacts/junk.fbx", fbx(9999)),
+    ]
+}
+
+fn check_project(pkg: &mut Package) {
+    assert_eq!(pkg.container, Container::Project);
+    assert!(pkg.index.get(&Guid::parse(MODEL).unwrap()).is_some(), "GUIDs come from the .meta files");
+    let plan = Plan::new(&pkg.index, None).unwrap();
+    assert_eq!(plan.prefab.as_ref().unwrap().path, "Assets/Shop/Avatar.prefab");
+    let b = plan.bind(&pkg.index, Guid::parse(MODEL).unwrap(), "Body");
+    assert_eq!(b.material_name.as_deref(), Some("Body"), "the model .meta remaps the slot like in a package");
+    assert_eq!(b.main_texture.unwrap().path.as_deref(), Some("Assets/Shop/Body.png"));
+    assert!(!pkg.index.entries().any(|e| e.pathname.as_deref().is_some_and(|p| p.contains("Library"))));
+    assert_eq!(all_bytes(pkg)[&Guid::parse(MODEL).unwrap()].len(), 500);
+}
+
+#[test]
+fn unity_project_folders_and_archives_use_meta_guids() {
+    let dir = TempDir::new("project");
+    for (rel, data) in project_files() {
+        dir.write(&format!("MyProject/{rel}"), &data);
+    }
+    let (mut pkg, _) = Package::open(Input::new(Source::Path(dir.0.join("MyProject"))), &IndexOptions::default()).unwrap();
+    check_project(&mut pkg);
+
+    let entries: Vec<(String, Vec<u8>)> = project_files().into_iter().map(|(rel, d)| (format!("MyProject/{rel}"), d)).collect();
+    let refs: Vec<(&[u8], &[u8], bool)> = entries.iter().map(|(n, d)| (n.as_bytes(), d.as_slice(), true)).collect();
+    let (mut pkg, _) = Package::open(Input::new(Source::Bytes(Arc::from(zip(&refs)))), &IndexOptions::default()).unwrap();
+    check_project(&mut pkg);
+    let seven: Vec<(&str, &[u8])> = entries.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    let (mut pkg, _) = Package::open(Input::new(Source::Bytes(Arc::from(sevenz(&seven)))), &IndexOptions::default()).unwrap();
+    check_project(&mut pkg);
 }

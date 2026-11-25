@@ -96,7 +96,7 @@ impl Input {
 
 pub(crate) fn is_container(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
-    lower.ends_with(".unitypackage") || lower.ends_with(".zip")
+    lower.ends_with(".unitypackage") || lower.ends_with(".zip") || lower.ends_with(".7z")
 }
 
 #[cfg(test)]

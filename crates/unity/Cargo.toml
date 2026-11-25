@@ -18,10 +18,12 @@ tar.workspace = true
 flate2.workspace = true
 zip.workspace = true
 encoding_rs.workspace = true
+sevenz-rust2.workspace = true
 
 [features]
 # Builders for synthetic packages, used by the tests of this crate and of unipeek.
-testing = []
+testing = ["sevenz-rust2/compress"]
 
 [dev-dependencies]
 serde_json.workspace = true
+sevenz-rust2 = { workspace = true, features = ["compress"] }

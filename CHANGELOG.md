@@ -21,6 +21,11 @@ overrides on FBX instances are applied, and normal maps, MatCaps and emission ar
   that a prefab makes on an instance of a model, by renderer, including materials added after the
   last submesh. `BindSource::PrefabOverride`. `Report::stale_overrides` counts overrides of objects the
   FBX no longer has; `material_overrides_ignored` now only means overrides that could not be matched.
+- 7z archives (`sevenz-rust2` 0.25, Apache-2.0, the version Snowcase uses), archives inside archives
+  (three levels, each within the binary budget; `member` joins the chain with `#`), and Unity projects:
+  a folder with `Assets/` (only `Assets/` and `Packages/` are read) or an archive of one, where every
+  asset keeps the GUID from its `.meta`. `Container::SevenZ` and `Container::Project`.
+  `rust-version` is now 1.93, which `sevenz-rust2` needs.
 - `Resolver`, `Located`, `Sources` and `Package::resolve`: GUIDs a prefab needs from other packages
   (nested prefabs such as the base avatar, meshes, materials and their textures) are looked up in one
   batch per round, grouped by package, and merged in; each package is opened once.

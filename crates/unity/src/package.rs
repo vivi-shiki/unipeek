@@ -414,7 +414,7 @@ fn yaml_class(head: &[u8]) -> Option<u32> {
 }
 
 /// `Shader "name"` as the first statement, after comments and blank lines.
-fn shader_name(text: &str) -> Option<String> {
+pub(crate) fn shader_name(text: &str) -> Option<String> {
     let mut in_block = false;
     for line in text.lines() {
         let mut line = line.trim();

@@ -202,4 +202,5 @@ fn with_base(gpu: &unipeek::Gpu) -> Result<unipeek::Report, unipeek::Error> {
 
 - prefab 对 FBX 实例上渲染器材质的覆盖（`m_Materials` 修改）按 Unity 给模型子物体算 fileID 的规则（类型加层级路径的 xxHash64）对到 FBX 节点上；对不上的报 `material_overrides_ignored`，指向 FBX 里已经没有的物体的旧修改记在 `stale_overrides`，Unity 自己也忽略它们。
 - PSD 读合成图；CMYK、16 / 32 位、索引色等会换算并报 `texture_approximated`；存的时候关了「最大兼容」的 PSD 没有真正的合成图，报 `texture_unreadable`。
-- 还不读 7z、Unity 工程、glTF / VRM。
+- 读 7z 和包中包（最多三层）；Unity 工程文件夹或它的压缩包按 `.meta` 里的 GUID 读，只看 `Assets/` 和 `Packages/`。
+- 还不读 glTF / VRM。
