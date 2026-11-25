@@ -157,6 +157,7 @@ fn thumbnails_render() {
     let _shared = shared();
     let Some((root, manifest)) = samples("thumbnails_render") else { return };
     let Some(gpu) = common::gpu("thumbnails_render") else { return };
+    let second = unipeek::gpu::Gpu::headless().unwrap();
     let out = std::env::temp_dir().join(format!("unipeek-local-thumbs-{}", std::process::id()));
     std::fs::create_dir_all(&out).unwrap();
     for (i, s) in manifest["samples"].as_array().unwrap().iter().enumerate() {
@@ -169,6 +170,17 @@ fn thumbnails_render() {
         let opts = ThumbOptions { size: 256, view: View::ThreeQuarter, background: Background::Transparent };
         let report = thumb::write_thumbnail(&gpu, &location(&root, rel), &file, &opts).unwrap_or_else(|e| panic!("{rel}: {e}"));
         let img = image::open(&file).unwrap().to_rgba8();
+        // Same input, same RENDERER_VERSION, another device: the same pixels.
+        let again = thumb::write_thumbnail(&second, &location(&root, rel), &out.join(format!("{i:02}-again.webp")), &opts).unwrap();
+        assert_eq!(again.status, report.status);
+        // The GPU itself is allowed a rounding step on a handful of pixels (seen on one sample with
+        // overlapping eye and face meshes); anything more is a real difference.
+        let other = image::open(out.join(format!("{i:02}-again.webp"))).unwrap().to_rgba8();
+        let diffs: Vec<u8> = img.pixels().zip(other.pixels()).filter(|(a, b)| a != b).map(|(a, b)| (0..4).map(|c| a.0[c].abs_diff(b.0[c])).max().unwrap()).collect();
+        if !diffs.is_empty() {
+            println!("local: {rel}: second render: {} pixel(s) differ by at most {}", diffs.len(), diffs.iter().max().unwrap());
+        }
+        assert!(diffs.len() <= 16 && diffs.iter().all(|&d| d <= 1), "{rel}: a second render differs in {} pixel(s)", diffs.len());
         let covered = img.pixels().filter(|p| p.0[3] > 0).count() as f64 / (256.0 * 256.0);
         assert!(covered > 0.002, "{rel}: only {:.3}% of the thumbnail is covered", covered * 100.0);
         println!("local: {rel}: thumbnail {:.1}% covered, {:?}, in {:?} -> {}", covered * 100.0, report.status, t.elapsed(), file.display());
@@ -261,6 +273,79 @@ fn big_package_streams() {
             assert!(grew < 256, "memory must not follow package size: grew {grew} MB while streaming 3 GB");
         }
         None => println!("local: indexed {} GB in {:?} (memory not measured on this platform)", 3 * PART >> 30, t.elapsed()),
+    }
+}
+
+/// M2: `serve` over the whole set, three times in one process: committed memory after the first
+/// round (caches and the device warmed up) must not keep growing.
+#[test]
+fn serve_memory_stays_flat() {
+    let Some((root, manifest)) = samples("serve_memory_stays_flat") else { return };
+    let _alone = EXCLUSIVE.write().unwrap_or_else(|e| e.into_inner());
+    if common::gpu("serve_memory_stays_flat").is_none() {
+        return;
+    }
+    let out = std::env::temp_dir().join(format!("unipeek-local-leak-{}", std::process::id()));
+    let mut requests = String::new();
+    for (i, s) in manifest["samples"].as_array().unwrap().iter().enumerate() {
+        let line = serde_json::json!({"id": i, "op": "thumb", "source": location(&root, s["path"].as_str().unwrap()), "out": out.join(format!("{i:02}.webp")).display().to_string(), "size": 256});
+        requests += &format!("{line}\n");
+        requests += &format!("{}\n", serde_json::json!({"id": i, "op": "info", "source": location(&root, s["path"].as_str().unwrap())}));
+    }
+    // One serve loop for all rounds, as in a host's long-lived child process.
+    let rounds = 3;
+    let all = requests.repeat(rounds);
+    let (reader, mut writer) = std::io::pipe().unwrap();
+    let feeder = std::thread::spawn(move || writer.write_all(all.as_bytes()));
+    let per_round = requests.lines().count();
+    let mut sink = RoundCounter { per_round, seen: 0, after: Vec::new() };
+    let t = Instant::now();
+    assert_eq!(unipeek::serve::serve(std::io::BufReader::new(reader), &mut sink), 0);
+    feeder.join().unwrap().unwrap();
+    let _ = std::fs::remove_dir_all(&out);
+    let mb: Vec<u64> = sink.after.iter().map(|b| b >> 20).collect();
+    println!("local: serve answered {} requests in {:?}; committed MB after each round: {mb:?}", per_round * rounds, t.elapsed());
+    if let [first, .., last] = sink.after[..] {
+        let grew = last.saturating_sub(first) >> 20;
+        assert!(grew < 64, "serve keeps {grew} MB more after {rounds} rounds than after the first: {mb:?}");
+    }
+}
+
+/// Counts reply lines and records committed memory at the end of each round.
+struct RoundCounter {
+    per_round: usize,
+    seen: usize,
+    after: Vec<u64>,
+}
+
+impl Write for RoundCounter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.seen += buf.iter().filter(|&&b| b == b'\n').count();
+        if self.seen > 0 && self.seen % self.per_round == 0 && self.after.len() < self.seen / self.per_round {
+            self.after.extend(committed());
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Committed (private) bytes of this process (Windows only).
+fn committed() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::{ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS}, Threading::GetCurrentProcess};
+        let mut c: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
+        c.cb = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        // SAFETY: the pseudo handle of the current process is always valid and `c` is sized for the call.
+        let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut c, c.cb) };
+        (ok != 0).then_some(c.PagefileUsage as u64)
+    }
+    #[cfg(not(windows))]
+    {
+        None
     }
 }
 

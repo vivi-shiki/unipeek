@@ -121,11 +121,14 @@ pub fn render_thumbnail(gpu: &Gpu, scene: &Scene, opts: &ThumbOptions) -> Result
     image::RgbaImage::from_raw(size, size, pixels).ok_or_else(|| Error::Gpu("readback size mismatch".into()))
 }
 
-/// Edges resolved against a transparent black background come out premultiplied.
+/// Edges resolved against a transparent black background come out premultiplied. Fully transparent
+/// pixels get black: blending can leave a little color there, and it varies between runs.
 fn unpremultiply(pixels: &mut [u8]) {
     for p in pixels.chunks_exact_mut(4) {
         let a = p[3] as u32;
-        if a > 0 && a < 255 {
+        if a == 0 {
+            p[..3].fill(0);
+        } else if a < 255 {
             for c in &mut p[..3] {
                 *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
             }
