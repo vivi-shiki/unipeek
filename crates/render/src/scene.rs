@@ -9,9 +9,10 @@ use glam::Vec3;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
+    time::Instant,
 };
 use unipeek_unity::{
-    Degrade, Guid, IndexOptions, Input, Package, PackageIndex, Plan, Report,
+    Degrade, Guid, IndexOptions, Input, Package, PackageIndex, Plan, Report, Timings,
     material::{Look, Material},
     meta::Meta,
 };
@@ -60,16 +61,24 @@ impl Scene {
             desc.push('#');
             desc.push_str(inner);
         }
+        let mut timings = Timings::default();
+        let t = Instant::now();
         let (mut pkg, inner) = Package::open(input, &opts.index)?;
+        timings.index_ms = Timings::since(t);
+        let t = Instant::now();
         let plan = Plan::new(&pkg.index, inner.as_deref())?;
         let mut report = Report::new(desc, pkg.container, pkg.member.clone(), &pkg.index, &plan);
+        timings.plan_ms = Timings::since(t);
 
         // Fetch models together with the textures their materials are likely to need, so a
         // unitypackage is usually read once more, not twice.
         let mut wanted: BTreeSet<Guid> = plan.models.iter().map(|m| m.guid).collect();
         wanted.extend(likely_textures(&pkg.index, &plan));
+        let t = Instant::now();
         let mut bytes = pkg.read_assets(&wanted)?;
+        timings.read_ms = Timings::since(t);
 
+        let t = Instant::now();
         let mut models = Vec::new();
         for (i, planned) in plan.models.iter().enumerate() {
             let parsed = match bytes.get(&planned.guid) {
@@ -89,6 +98,9 @@ impl Scene {
             }
         }
 
+        timings.models_ms = Timings::since(t);
+
+        let t = Instant::now();
         let mut materials: Vec<SceneMaterial> = Vec::new();
         let mut material_textures: Vec<Option<Guid>> = Vec::new();
         let mut material_slots: Vec<(String, String)> = Vec::new();
@@ -116,12 +128,17 @@ impl Scene {
             }
         }
 
+        timings.bind_ms = Timings::since(t);
         let missing: BTreeSet<Guid> = material_textures.iter().flatten().filter(|g| !bytes.contains_key(g)).copied().collect();
         if !missing.is_empty() {
+            let t = Instant::now();
             bytes.extend(pkg.read_assets(&missing)?);
+            timings.read_ms += Timings::since(t);
         }
         let unique: BTreeSet<Guid> = material_textures.iter().flatten().copied().collect();
+        let t = Instant::now();
         let decoded = decode_all(&unique, &bytes, opts.max_texture);
+        timings.textures_ms = Timings::since(t);
         for (guid, result) in &decoded {
             if let Err(reason) = result {
                 let path = pkg.index.get(guid).and_then(|e| e.pathname.clone()).unwrap_or_else(|| guid.to_string());
@@ -137,6 +154,7 @@ impl Scene {
             }
         }
         report.read = pkg.index.stats;
+        report.timings = timings;
 
         let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
         for (_, m) in &models {

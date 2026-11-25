@@ -10,7 +10,7 @@ use unipeek::{
 const USAGE: &str = "usage:
   unipeek info  <input> [--json]
   unipeek ls    <input>
-  unipeek thumb <input> -o <out.png|out.webp> [--size 512] [--view front|side|back|3q] [--bg transparent|#rrggbb[aa]]
+  unipeek thumb <input> -o <out.png|out.webp> [--size 512] [--view front|side|back|3q] [--bg transparent|#rrggbb[aa]] [--timings]
   unipeek serve
   unipeek version
 
@@ -79,6 +79,7 @@ fn run(args: &[String]) -> Result<i32, Failure> {
             let (input, flags) = input_and_flags(rest)?;
             let mut opts = ThumbOptions::default();
             let mut out = None;
+            let mut timings = false;
             let mut it = flags.iter();
             while let Some(flag) = it.next() {
                 let mut value = || it.next().ok_or_else(|| Failure::Usage(format!("{flag} needs a value")));
@@ -87,6 +88,7 @@ fn run(args: &[String]) -> Result<i32, Failure> {
                     "--size" => opts.size = value()?.parse().map_err(|_| Failure::Usage("--size must be a number".into()))?,
                     "--view" => opts.view = value()?.parse::<View>().map_err(Failure::Usage)?,
                     "--bg" => opts.background = Background::parse(value()?).map_err(Failure::Usage)?,
+                    "--timings" => timings = true,
                     other => return Err(Failure::Usage(format!("unknown option {other}"))),
                 }
             }
@@ -94,13 +96,19 @@ fn run(args: &[String]) -> Result<i32, Failure> {
             if thumb::ImageFormat::from_path(&out).is_none() {
                 return Err(Failure::Usage(format!("{out} must end with .png or .webp")));
             }
+            let t = std::time::Instant::now();
             let gpu = Gpu::headless()?;
+            let gpu_ms = unipeek::unity::Timings::since(t);
             for failed in &gpu.fallback {
                 eprintln!("fallback: {failed}");
             }
             let report = thumb::write_thumbnail(&gpu, input, std::path::Path::new(&out), &opts)?;
             for d in &report.degrades {
                 eprintln!("degraded: {}", serde_json::to_string(d).unwrap_or_default());
+            }
+            if timings {
+                eprintln!("gpu:       {gpu_ms} ms ({})", gpu.describe());
+                print_timings(&report, &mut std::io::stderr());
             }
             Ok(status_code(&report))
         }
@@ -127,6 +135,15 @@ fn status_code(report: &Report) -> i32 {
         Status::Ok => 0,
         s => s.exit_code(),
     }
+}
+
+fn print_timings(r: &Report, out: &mut impl std::io::Write) {
+    let t = &r.timings;
+    let _ = writeln!(
+        out,
+        "timings:   index {} ms, plan {} ms, read {} ms, models {} ms, bind {} ms, textures {} ms, render {} ms, encode {} ms",
+        t.index_ms, t.plan_ms, t.read_ms, t.models_ms, t.bind_ms, t.textures_ms, t.render_ms, t.encode_ms
+    );
 }
 
 fn print_report(r: &Report) {
@@ -162,5 +179,6 @@ fn print_report(r: &Report) {
         println!("degraded:  {}", serde_json::to_string(d).unwrap_or_default());
     }
     println!("read:      {} pass(es), {} bytes", r.read.passes, r.read.bytes);
+    print_timings(r, &mut std::io::stdout());
     println!("status:    {:?}", r.status);
 }

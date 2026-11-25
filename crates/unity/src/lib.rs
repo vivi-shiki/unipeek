@@ -18,6 +18,6 @@ pub use error::{Error, Result};
 pub use guid::Guid;
 pub use load::{Container, Package};
 pub use plan::{Binding, Plan};
-pub use report::{Degrade, Report, Status};
+pub use report::{Degrade, Report, Status, Timings};
 pub use package::{AssetKind, Entry, IndexOptions, PackageIndex, PackageIssue, ReadStats};
 pub use source::{Input, Source};

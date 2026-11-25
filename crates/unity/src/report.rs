@@ -69,6 +69,34 @@ pub struct MaterialReport {
     pub texture_size: Option<[u32; 2]>,
 }
 
+/// Wall-clock milliseconds spent in each loading step, for hosts that schedule work by disk and CPU.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize)]
+pub struct Timings {
+    /// Opening the input and the indexing pass (decompression, small YAML kept in memory).
+    pub index_ms: f64,
+    /// Parsing prefabs and choosing what to show.
+    pub plan_ms: f64,
+    /// Reading FBX and texture bytes after planning (further passes over the package).
+    pub read_ms: f64,
+    /// Parsing FBX files.
+    pub models_ms: f64,
+    /// Binding materials (`.mat` YAML).
+    pub bind_ms: f64,
+    /// Decoding, scaling and mip-mapping textures, on worker threads.
+    pub textures_ms: f64,
+    /// Drawing and reading the frame back; zero when nothing was rendered.
+    pub render_ms: f64,
+    /// Encoding the image file; zero when nothing was written.
+    pub encode_ms: f64,
+}
+
+impl Timings {
+    /// Milliseconds since `start`, rounded to a tenth.
+    pub fn since(start: std::time::Instant) -> f64 {
+        (start.elapsed().as_secs_f64() * 10_000.0).round() / 10.0
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Report {
     pub input: String,
@@ -83,6 +111,7 @@ pub struct Report {
     pub degrades: Vec<Degrade>,
     pub issues: Vec<PackageIssue>,
     pub read: ReadStats,
+    pub timings: Timings,
     pub status: Status,
 }
 
@@ -100,6 +129,7 @@ impl Report {
             degrades: Vec::new(),
             issues: index.issues.clone(),
             read: index.stats,
+            timings: Timings::default(),
             status: Status::Ok,
         };
         if plan.models.is_empty() {

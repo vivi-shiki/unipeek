@@ -155,8 +155,11 @@ impl Background {
 pub fn write_thumbnail(gpu: &Gpu, location: &str, out: &std::path::Path, opts: &ThumbOptions) -> Result<unipeek_unity::Report> {
     let format = ImageFormat::from_path(out).ok_or_else(|| Error::Image(format!("{} must end with .png or .webp", out.display())))?;
     let load = crate::LoadOptions { max_texture: (opts.size.saturating_mul(2)).clamp(256, 2048), ..Default::default() };
-    let scene = Scene::load(unipeek_unity::Input::from_location(location), &load)?;
+    let mut scene = Scene::load(unipeek_unity::Input::from_location(location), &load)?;
+    let t = std::time::Instant::now();
     let img = render_thumbnail(gpu, &scene, opts)?;
+    scene.report.timings.render_ms = unipeek_unity::Timings::since(t);
+    let t = std::time::Instant::now();
     let bytes = encode(&img, format)?;
     if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
@@ -164,6 +167,7 @@ pub fn write_thumbnail(gpu: &Gpu, location: &str, out: &std::path::Path, opts: &
     let tmp = out.with_file_name(format!("{}.tmp", out.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()));
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, out)?;
+    scene.report.timings.encode_ms = unipeek_unity::Timings::since(t);
     Ok(scene.report)
 }
 
