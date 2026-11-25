@@ -23,6 +23,10 @@ the minor version may break the API; `0.1.x` releases only fix bugs and add thin
 - `LoadOptions::decode_textures`: off for reports. `info` and the serve `info` request now read texture
   sizes from the file headers instead of decoding every texture.
 - `unipeek thumb --timings` prints where the time went, including GPU start-up.
+- `serve::Worker`: the host side of `serve`. Runs the child process, restarts it after it dies or
+  times out, and returns an error only for the request that was in flight.
+- Fully transparent thumbnail pixels are always black (they used to keep a little blended color
+  that could differ between runs).
 
 ## 0.1.0-alpha.2 (2026-11-24)
 

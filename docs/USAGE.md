@@ -59,7 +59,23 @@ fn main() {
 - 其他字段：`id` 原样带回；`view` 是 `front` / `side` / `back` / `3q`；`background` 是 `transparent`（默认）或 `#rrggbb`；`out` 只能是 `.png` 或 `.webp`（无损），先写临时文件再改名。
 - `status` 是 `ok` / `degraded` / `unsupported` / `error`。降级也出图，原因放在 `reasons` 里；`missing_guids` 只列缺的 prefab 和网格（通常是素体）。没有可显示的模型时是 `unsupported`。
 - 另外两个请求：`{"op":"info","source":…}` 回复里多一个完整的 `report`；`{"op":"version"}` 回复 `version` 和 `renderer_version`。
-- 子进程退出或没有回复就重启它，跳过那个包，记成失败。
+- 子进程退出或没有回复就重启它，跳过那个包，记成失败。`unipeek::serve::Worker` 就是这一侧的现成实现：
+
+```rust,no_run
+use std::{process::Command, time::Duration};
+let mut worker = unipeek::Worker::new(|| {
+    let mut c = Command::new(std::env::current_exe().unwrap());
+    c.arg("--thumb-worker");
+    c
+})
+.with_timeout(Duration::from_secs(120));
+let request = serde_json::json!({"id": 7, "op": "thumb", "source": "D:/Assets/Example.unitypackage", "out": "D:/thumbs/abcd.webp"});
+match worker.request(&request) {
+    Ok(reply) => println!("{}", reply["status"]),
+    // 子进程死了或超时：这一个包记失败，下一个请求会自动换新的子进程
+    Err(e) => eprintln!("{e}"),
+}
+```
 - 调度（只排可见商品、可暂停、同盘不并发）由 Snowcase 负责，适合放在「整理文件」「探查包」之后作为第三段。unipeek 保证一个请求对一个包只顺序读。
 
 不想开子进程时（比如测试）也能直接调：
@@ -74,7 +90,18 @@ fn thumbnail(path: &str) -> Result<unipeek::Report, unipeek::Error> {
 }
 ```
 
-`Scene::load` 不碰 GPU，可以放在后台线程；`unipeek::write_thumbnail(&gpu, location, out, &opts)` 把加载、渲染、编码和写文件一起做完。
+`Scene::load` 不碰 GPU，可以放在后台线程；`LoadOptions { decode_textures: false, .. }` 只要报告时不解码贴图（尺寸从文件头读）；`report.timings` 是每一步的毫秒数；`unipeek::write_thumbnail(&gpu, location, out, &opts)` 把加载、渲染、编码和写文件一起做完。
+
+### debug 构建要给依赖开优化
+
+宿主的 debug 构建默认对所有依赖 `opt-level = 0`，PNG 解码和缩放会慢十倍以上：同一个有 7 张 4K PNG 的头像包，一张缩略图 release 约 1.5 s，未优化的 debug 要 17–19 s。在宿主的工作区 `Cargo.toml` 里加：
+
+```toml
+[profile.dev.package."*"]
+opt-level = 3
+```
+
+只想给一部分依赖开也行，至少要 `unipeek`、`unipeek-unity`、`image`、`png`、`fdeflate`、`flate2`、`miniz_oxide`、`ufbx`。
 
 ## 命令行
 
@@ -83,7 +110,7 @@ fn thumbnail(path: &str) -> Result<unipeek::Report, unipeek::Error> {
 ```text
 unipeek info  <输入> [--json]        # 报告，不需要 GPU
 unipeek ls    <输入>                 # 包里的文件
-unipeek thumb <输入> -o out.webp [--size 512] [--view 3q] [--bg transparent]
+unipeek thumb <输入> -o out.webp [--size 512] [--view 3q] [--bg transparent] [--timings]
 unipeek serve
 unipeek version
 ```
@@ -146,4 +173,5 @@ unipeek 按包分组，每个包只读一遍。找不到时照常出图，记「
 ## 已知限制（0.1.0-alpha.2）
 
 - prefab 对 FBX 实例上渲染器材质的覆盖（`m_Materials` 修改）还对不上是哪个渲染器，报告里是 `material_overrides_ignored`，那些槽位按 FBX 的默认材质画。
-- 还不读 PSD 贴图（报 `texture_unreadable`）、7z、Unity 工程、glTF / VRM。
+- PSD 读合成图；CMYK、16 / 32 位、索引色等会换算并报 `texture_approximated`；存的时候关了「最大兼容」的 PSD 没有真正的合成图，报 `texture_unreadable`。
+- 还不读 7z、Unity 工程、glTF / VRM。

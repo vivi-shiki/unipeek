@@ -27,7 +27,7 @@ fn shared() -> std::sync::RwLockReadGuard<'static, ()> {
 }
 
 fn samples(test: &str) -> Option<(PathBuf, Value)> {
-    let Some(root) = std::env::var_os("UNIPEEK_SAMPLES").map(PathBuf::from) else {
+    let Some(root) = std::env::var_os("UNIPEEK_SAMPLES").filter(|v| !v.is_empty()).map(PathBuf::from) else {
         println!("skipped: {test}: UNIPEEK_SAMPLES is not set");
         return None;
     };
