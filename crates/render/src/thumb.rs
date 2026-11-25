@@ -2,7 +2,7 @@
 use crate::{Error, Result, Scene, camera::Orbit, gpu::Gpu, renderer::Renderer};
 
 /// Bump whenever rendered pixels change, so callers' thumbnail caches are rebuilt.
-pub const RENDERER_VERSION: u32 = 1;
+pub const RENDERER_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum View {

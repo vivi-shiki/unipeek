@@ -6,6 +6,8 @@ the minor version may break the API; `0.1.x` releases only fix bugs and add thin
 
 ## Unreleased
 
+`RENDERER_VERSION` is 2: PSD textures that used to be drawn white are now drawn.
+
 ### unipeek-unity
 
 - `Report::timings` (`Timings`): milliseconds spent indexing, planning, reading assets, parsing models,
