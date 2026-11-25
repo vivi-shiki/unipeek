@@ -466,3 +466,42 @@ fn psd_composites_decode() {
     println!("local: {} PSD file(s)", found.len());
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// M4: in a 690² viewport (the 460 px drawer at 150%), the untextured model of the biggest sample
+/// appears within a second and each dragged frame takes at most 5 ms to render and read back.
+/// The limits are only checked in release builds.
+#[test]
+fn viewport_speed() {
+    let _shared = shared();
+    let Some((root, manifest)) = samples("viewport_speed") else { return };
+    let Some(gpu) = common::gpu("viewport_speed") else { return };
+    let biggest = manifest["samples"].as_array().unwrap().iter().filter(|s| s["path"].as_str().unwrap().ends_with(".unitypackage")).max_by_key(|s| s["expect"]["triangles"].as_u64().unwrap()).unwrap();
+    let rel = biggest["path"].as_str().unwrap();
+    let mut view = unipeek::Viewport::offscreen(&gpu, 690, 690);
+    let t = Instant::now();
+    view.load(Input::from_location(&location(&root, rel)), LoadOptions { max_texture: 1024, ..Default::default() });
+    let mut first = None;
+    while view.progress().is_some() {
+        if view.update() && first.is_none() {
+            view.render().unwrap();
+            first = Some(t.elapsed());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    view.update();
+    let textured = t.elapsed();
+    let first = first.expect("the untextured model arrives before the textures");
+    view.render().unwrap();
+    let frames = 120;
+    let t = Instant::now();
+    for _ in 0..frames {
+        view.orbit().rotate(4.0, 0.5);
+        assert!(view.render().unwrap().is_some());
+    }
+    let per_frame = t.elapsed().as_secs_f64() * 1e3 / frames as f64;
+    println!("local: viewport {rel}: untextured on screen in {first:?}, textured in {textured:?}, {per_frame:.2} ms per 690x690 frame");
+    if cfg!(not(debug_assertions)) {
+        assert!(first.as_secs_f64() <= 1.0, "first frame after {first:?}");
+        assert!(per_frame <= 5.0, "{per_frame:.2} ms per frame");
+    }
+}

@@ -12,9 +12,9 @@
 //! env: LAB_SPIN=1 rotates continuously, LAB_SECS=n quits after n seconds.
 mod backend;
 
-use backend::{Readback, Rect, TopmostLayer};
+use backend::{Rect, TopmostLayer};
 use gpui_kit::{prelude::FluentBuilder, *};
-use unipeek::{LoadOptions, Scene, camera::Orbit, unity::Input};
+use unipeek::{LoadOptions, Scene, Viewport, camera::Orbit, gpu::Gpu, unity::Input};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{sync::Arc, time::Instant};
 
@@ -46,7 +46,8 @@ struct Preview {
     layer: Option<TopmostLayer>,
     #[cfg(feature = "fast")]
     fast: Option<fast::FastLayer>,
-    readback: Option<Readback>,
+    /// The readback path uses only `unipeek`'s public `Viewport`.
+    readback: Option<Viewport>,
     image: Option<Arc<RenderImage>>,
     stats: Stats,
     started: Instant,
@@ -133,12 +134,20 @@ impl Preview {
             return Ok(());
         }
         if self.readback.is_none() {
-            self.readback = Some(Readback::new(&self.scene)?);
+            let gpu = Gpu::headless()?;
+            eprintln!("[readback] adapter={}", gpu.describe());
+            let mut view = Viewport::offscreen(&gpu, self.rect.w, self.rect.h);
+            view.set_scene(self.scene.clone());
+            self.readback = Some(view);
         }
         let t = Instant::now();
         let (w, h) = (self.rect.w, self.rect.h);
-        let pixels = self.readback.as_mut().unwrap().draw(w, h, &self.camera)?;
-        let buffer = image::RgbaImage::from_raw(w, h, pixels).expect("size matches");
+        let view = self.readback.as_mut().unwrap();
+        view.resize(w, h);
+        *view.orbit() = self.camera;
+        let Some(pixels) = view.render()? else { return Ok(()) };
+        // GPUI's RenderImage takes BGRA bytes.
+        let buffer = image::RgbaImage::from_raw(w, h, pixels.to_vec()).expect("size matches");
         let frames: smallvec::SmallVec<[image::Frame; 1]> = smallvec::smallvec![image::Frame::new(buffer)];
         let new = Arc::new(RenderImage::new(frames));
         // Every RenderImage gets its own atlas entry; release the previous one.

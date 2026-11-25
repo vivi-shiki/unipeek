@@ -48,6 +48,16 @@ pub struct Part {
     pub count: u32,
 }
 
+/// What `Scene::load_with` tells its caller while it works.
+pub enum LoadEvent<'a> {
+    /// Rough fraction of the work done, from 0 to 1.
+    Progress(f32),
+    /// Geometry and materials are ready; textures are not decoded yet. A viewer can show this
+    /// white model while the textures load.
+    Untextured(&'a Scene),
+}
+
+#[derive(Clone)]
 pub struct Scene {
     pub vertices: Vec<Vertex>,
     pub parts: Vec<Part>,
@@ -59,6 +69,11 @@ pub struct Scene {
 
 impl Scene {
     pub fn load(input: Input, opts: &LoadOptions) -> Result<Scene> {
+        Scene::load_with(input, opts, &mut |_| {})
+    }
+
+    /// Like `load`, reporting progress and handing out the untextured scene before textures are decoded.
+    pub fn load_with(input: Input, opts: &LoadOptions, events: &mut dyn FnMut(LoadEvent<'_>)) -> Result<Scene> {
         let mut desc = input.source.describe();
         for inner in &input.inner {
             desc.push('#');
@@ -68,6 +83,7 @@ impl Scene {
         let t = Instant::now();
         let (mut pkg, inner) = Package::open(input, &opts.index)?;
         timings.index_ms = Timings::since(t);
+        events(LoadEvent::Progress(0.3));
         let t = Instant::now();
         let plan = Plan::new(&pkg.index, inner.as_deref())?;
         let mut report = Report::new(desc, pkg.container, pkg.member.clone(), &pkg.index, &plan);
@@ -80,6 +96,7 @@ impl Scene {
         let t = Instant::now();
         let mut bytes = pkg.read_assets(&wanted)?;
         timings.read_ms = Timings::since(t);
+        events(LoadEvent::Progress(0.5));
 
         let t = Instant::now();
         let mut models = Vec::new();
@@ -160,6 +177,18 @@ impl Scene {
         }
 
         timings.bind_ms = Timings::since(t);
+        let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for (_, m) in &models {
+            min = min.min(m.min);
+            max = max.max(m.max);
+        }
+        if models.is_empty() {
+            (min, max) = (Vec3::ZERO, Vec3::ZERO);
+        }
+        let scene = Scene { vertices, parts, materials, min, max, report };
+        events(LoadEvent::Progress(0.7));
+        events(LoadEvent::Untextured(&scene));
+        let Scene { parts, vertices, mut materials, mut report, .. } = scene;
         let missing: BTreeSet<Guid> = material_textures.iter().flatten().filter(|g| !bytes.contains_key(g)).copied().collect();
         if !missing.is_empty() {
             let t = Instant::now();
@@ -189,15 +218,7 @@ impl Scene {
         }
         report.read = pkg.index.stats;
         report.timings = timings;
-
-        let (mut min, mut max) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-        for (_, m) in &models {
-            min = min.min(m.min);
-            max = max.max(m.max);
-        }
-        if models.is_empty() {
-            (min, max) = (Vec3::ZERO, Vec3::ZERO);
-        }
+        events(LoadEvent::Progress(1.0));
         Ok(Scene { vertices, parts, materials, min, max, report })
     }
 

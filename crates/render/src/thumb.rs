@@ -14,7 +14,7 @@ pub enum View {
 
 impl View {
     /// Camera yaw and pitch in radians. Yaw 0 looks at the model's front (+Z).
-    fn angles(self) -> (f32, f32) {
+    pub fn angles(self) -> (f32, f32) {
         match self {
             View::Front => (0.0, 0.05),
             View::Side => (std::f32::consts::FRAC_PI_2, 0.05),
@@ -91,13 +91,7 @@ pub fn render_thumbnail(gpu: &Gpu, scene: &Scene, opts: &ThumbOptions) -> Result
     let size = opts.size.clamp(1, 8192);
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let mut renderer = Renderer::new(&gpu.device, &gpu.queue, format, scene);
-    renderer.clear = match opts.background {
-        Background::Transparent => wgpu::Color::TRANSPARENT,
-        Background::Color([r, g, b, a]) => {
-            let lin = |c: u8| srgb_to_linear(c as f64 / 255.0);
-            wgpu::Color { r: lin(r), g: lin(g), b: lin(b), a: a as f64 / 255.0 }
-        }
-    };
+    renderer.clear = clear_color(opts.background);
     let mut camera = Orbit::fit(scene.min, scene.max);
     (camera.yaw, camera.pitch) = opts.view.angles();
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -121,9 +115,20 @@ pub fn render_thumbnail(gpu: &Gpu, scene: &Scene, opts: &ThumbOptions) -> Result
     image::RgbaImage::from_raw(size, size, pixels).ok_or_else(|| Error::Gpu("readback size mismatch".into()))
 }
 
+/// The render target's clear color for a background (sRGB bytes to linear).
+pub(crate) fn clear_color(background: Background) -> wgpu::Color {
+    match background {
+        Background::Transparent => wgpu::Color::TRANSPARENT,
+        Background::Color([r, g, b, a]) => {
+            let lin = |c: u8| srgb_to_linear(c as f64 / 255.0);
+            wgpu::Color { r: lin(r), g: lin(g), b: lin(b), a: a as f64 / 255.0 }
+        }
+    }
+}
+
 /// Edges resolved against a transparent black background come out premultiplied. Fully transparent
 /// pixels get black: blending can leave a little color there, and it varies between runs.
-fn unpremultiply(pixels: &mut [u8]) {
+pub(crate) fn unpremultiply(pixels: &mut [u8]) {
     for p in pixels.chunks_exact_mut(4) {
         let a = p[3] as u32;
         if a == 0 {

@@ -12,13 +12,15 @@ pub mod scene;
 pub mod serve;
 pub mod texture;
 pub mod thumb;
+pub mod viewport;
 
 pub use error::{Error, Result};
 pub use glam;
 pub use gpu::Gpu;
-pub use scene::{LoadOptions, Scene};
+pub use scene::{LoadEvent, LoadOptions, Scene};
 pub use serve::{Worker, WorkerError, serve};
 pub use thumb::{Background, ImageFormat, RENDERER_VERSION, ThumbOptions, View, encode, render_thumbnail, write_thumbnail};
+pub use viewport::{Loaded, Loading, Viewport};
 pub use unipeek_unity as unity;
 pub use unipeek_unity::{Input, Report, Source, Status};
 pub use wgpu;
