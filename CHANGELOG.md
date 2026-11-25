@@ -26,6 +26,7 @@ overrides on FBX instances are applied, and normal maps, MatCaps and emission ar
   a folder with `Assets/` (only `Assets/` and `Packages/` are read) or an archive of one, where every
   asset keeps the GUID from its `.meta`. `Container::SevenZ` and `Container::Project`.
   `rust-version` is now 1.93, which `sevenz-rust2` needs.
+- `Container::Gltf` for glTF, GLB and VRM inputs (read by `unipeek`).
 - `Resolver`, `Located`, `Sources` and `Package::resolve`: GUIDs a prefab needs from other packages
   (nested prefabs such as the base avatar, meshes, materials and their textures) are looked up in one
   batch per round, grouped by package, and merged in; each package is opened once.
@@ -63,6 +64,10 @@ overrides on FBX instances are applied, and normal maps, MatCaps and emission ar
   multi-view images (224², 384²).
 - Normal maps with MikkTSpace tangents (the `mikktspace` crate, MIT OR Apache-2.0), MatCap (mix, add,
   multiply) and emission in the renderer. `SceneMaterial` has `normal`, `emission` and `matcap`.
+- glTF 2.0, GLB and VRM 0.x / 1.0 inputs (`gltf` crate, MIT OR Apache-2.0): meshes in their rest pose
+  (skinned meshes through their joints), glTF materials (base color, alpha mode, double-sided, normal and
+  emissive textures) and MToon from `VRMC_materials_mtoon` or UniVRM 0.x material properties (shade
+  color, world-space outline, MatCap). VRM 0.x models are turned to face +Z.
 - `serve::Worker`: the host side of `serve`. Runs the child process, restarts it after it dies or
   times out, and returns an error only for the request that was in flight.
 - Fully transparent thumbnail pixels are always black (they used to keep a little blended color

@@ -97,6 +97,18 @@ impl Scene {
             desc.push('#');
             desc.push_str(inner);
         }
+        if input.inner.is_empty() {
+            match &input.source {
+                unipeek_unity::Source::Path(p) if p.is_file() && crate::gltf_scene::is_gltf(&[], p.file_name().and_then(|n| n.to_str())) => {
+                    let bytes = std::fs::read(p)?;
+                    return crate::gltf_scene::load(&bytes, p.parent(), desc, opts, events);
+                }
+                unipeek_unity::Source::Bytes(b) if crate::gltf_scene::is_gltf(&b[..b.len().min(4)], None) => {
+                    return crate::gltf_scene::load(b, None, desc, opts, events);
+                }
+                _ => {}
+            }
+        }
         let mut timings = Timings::default();
         let t = Instant::now();
         let (mut pkg, inner) = Package::open(input, &opts.index)?;

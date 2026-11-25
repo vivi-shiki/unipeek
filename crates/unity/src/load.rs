@@ -35,6 +35,8 @@ pub enum Container {
     /// A Unity project folder (or archive of one): `Assets/` and `Packages/` with their `.meta` files.
     Project,
     Model,
+    /// glTF, GLB or VRM, read by the rendering crate.
+    Gltf,
 }
 
 pub struct Package {

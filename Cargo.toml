@@ -28,6 +28,7 @@ flate2 = "1.1.11"
 zip = { version = "9.8", default-features = false, features = ["deflate-flate2"] }
 encoding_rs = "0.8.44"
 sevenz-rust2 = { version = "0.25.0", default-features = false }
+gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names"] }
 mikktspace = { version = "0.3", default-features = false, features = ["glam"] }
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 

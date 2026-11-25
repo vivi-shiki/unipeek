@@ -137,7 +137,7 @@ fn every_input_opens() {
                 continue;
             }
             let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
-            if !["unitypackage", "zip", "fbx", "7z"].contains(&ext.as_str()) {
+            if !["unitypackage", "zip", "fbx", "7z", "vrm", "glb", "gltf"].contains(&ext.as_str()) {
                 continue;
             }
             let rel = p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");

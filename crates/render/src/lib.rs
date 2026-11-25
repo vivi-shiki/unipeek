@@ -4,6 +4,7 @@
 //! The GPU-free parsing layer is re-exported as `unity`.
 pub mod camera;
 pub mod error;
+pub mod gltf_scene;
 pub mod gpu;
 pub mod model;
 pub mod psd;
