@@ -2,7 +2,7 @@
 
 结论：Snowcase 在 `Cargo.toml` 里按名字依赖 `unipeek`，不用复制代码。`formats` 依赖只管解析的 `unipeek-unity`，`app` 依赖带渲染的 `unipeek`。缩略图在 `snowcase.exe --thumb-worker` 子进程里调 `unipeek::serve`，详情预览用 `Viewport::offscreen` 读回给 `RenderImage`。
 
-状态：2026-11-26 按 `dev/m1-m6` 分支更新（下一个版本）。缩略图、`serve`、`info`、命令行和「详情预览」（M4）已经实现并有测试；「跨包依赖」（M5）一节还是计划稿。写给 Snowcase 的接入方（Map1en），决定的来由见 [INTEGRATION「接入决定」](INTEGRATION.md#接入决定m02026-11-24)。
+状态：2026-11-26 按 `dev/m1-m6` 分支更新（下一个版本）。缩略图、`serve`、`info`、命令行、「详情预览」（M4）和「跨包依赖」（M5）都已经实现并有测试。写给 Snowcase 的接入方（Map1en），决定的来由见 [INTEGRATION「接入决定」](INTEGRATION.md#接入决定m02026-11-24)。
 
 仓库：<https://github.com/vivi-shiki/unipeek>，MIT OR Apache-2.0，可以进 GPL-3.0 的 Snowcase；反过来 Snowcase 的代码不能进 unipeek。
 
@@ -57,7 +57,7 @@ fn main() {
 
 - `source` 不带 `#` 时 unipeek 自己选主 prefab，回复里写选了哪个；写成 `Example.unitypackage#Assets/…/X.prefab` 就渲那一个（包文件树里点开某个 prefab 时用）。zip 里的包写成 `Item.zip#Item/Example.unitypackage#Assets/…`。
 - 其他字段：`id` 原样带回；`view` 是 `front` / `side` / `back` / `3q`；`background` 是 `transparent`（默认）或 `#rrggbb`；`out` 只能是 `.png` 或 `.webp`（无损），先写临时文件再改名。
-- `status` 是 `ok` / `degraded` / `unsupported` / `error`。降级也出图，原因放在 `reasons` 里；`missing_guids` 只列缺的 prefab 和网格（通常是素体）。没有可显示的模型时是 `unsupported`。
+- `status` 是 `ok` / `degraded` / `unsupported` / `error`。降级也出图，原因放在 `reasons` 里；`missing_guids` 列缺的 prefab、网格和材质（通常是素体）。没有可显示的模型时是 `unsupported`。
 - 另外两个请求：`{"op":"info","source":…}` 回复里多一个完整的 `report`；`{"op":"version"}` 回复 `version` 和 `renderer_version`。
 - 子进程退出或没有回复就重启它，跳过那个包，记成失败。`unipeek::serve::Worker` 就是这一侧的现成实现：
 
@@ -108,7 +108,7 @@ opt-level = 3
 `cargo install unipeek` 或直接用编译出的 `unipeek.exe`：
 
 ```text
-unipeek info  <输入> [--json]        # 报告，不需要 GPU
+unipeek info  <输入> [--json] [--with <包或文件夹>]...   # 报告，不需要 GPU
 unipeek ls    <输入>                 # 包里的文件
 unipeek thumb <输入> -o out.webp [--size 512] [--view 3q] [--bg transparent] [--timings]
 unipeek view  <输入>                 # 独立窗口：左键转，右键或中键平移，滚轮缩放，R 复位，1-4 视角
@@ -148,21 +148,37 @@ fn drawer(gpu: &unipeek::Gpu) -> Result<(), unipeek::Error> {
 - 不想用 `Viewport` 的加载时，`unipeek::Loading::start(input, opts)` 单独在后台加载，`poll()` 先给 `Loaded::Untextured` 再给 `Loaded::Textured`；`set_scene` 把场景交给视口。
 - 包文件树里某一个 prefab 的缩略图：`source` 写成 `Example.unitypackage#Assets/…/X.prefab`，和商品主图是同一个请求。
 
-## 跨包依赖（素体，M5，计划稿）
+## 跨包依赖（素体，M5）
 
-Snowcase 不维护词表，从名字认不出衣装适配哪个 Avatar，所以要靠 GUID：unipeek 列出 prefab 引用了但包里没有的 GUID，Snowcase 实现 `Resolver` 告诉它在哪个包。
+Snowcase 不维护词表，从名字认不出衣装适配哪个 Avatar，所以要靠 GUID：unipeek 列出 prefab 用到了但包里没有的 GUID（嵌套的 prefab、网格、材质、材质的主贴图），一次性交给 `Resolver`，Snowcase 告诉它在哪个包。
 
-```rust,ignore
-impl unipeek::Resolver for LibraryResolver {
-    fn locate(&self, guids: &[unipeek::Guid]) -> Vec<(unipeek::Guid, unipeek::Located)> {
-        // 查 cache.db 的 package_asset 拿到 (fingerprint, member)，
-        // 再用 library.db 映射回磁盘路径
-        todo!()
+```rust,no_run
+use unipeek::unity::{Guid, Located, Resolver};
+
+struct LibraryResolver;
+
+impl Resolver for LibraryResolver {
+    fn locate(&self, guids: &[Guid]) -> Vec<(Guid, Located)> {
+        // 查 cache.db 的 package_asset 拿到 (fingerprint, member)，再用 library.db 映射回磁盘路径；
+        // 包在 zip 里时写成 "D:/Shop/Avatar.zip#Avatar/Avatar.unitypackage"。找不到的 GUID 不返回。
+        guids.iter().map(|g| (*g, Located::Package { location: "D:/Assets/Base.unitypackage".into(), guid: *g })).collect()
     }
+}
+
+fn with_base(gpu: &unipeek::Gpu) -> Result<unipeek::Report, unipeek::Error> {
+    let opts = unipeek::LoadOptions { resolver: Some(std::sync::Arc::new(LibraryResolver)), ..Default::default() };
+    let scene = unipeek::Scene::load(unipeek::Input::from_location("D:/Assets/Outfit.unitypackage"), &opts)?;
+    let _image = unipeek::render_thumbnail(gpu, &scene, &unipeek::ThumbOptions::default())?;
+    Ok(scene.report) // report.dependencies：用到了哪些包
 }
 ```
 
-unipeek 按包分组，每个包只读一遍。找不到时照常出图，记「缺素体」。shader 靠内置的 GUID 表识别，不需要找到 shader 文件。
+- `locate` 每轮只调一次，带上这一轮缺的全部 GUID；同一个 GUID 不会问第二次。返回的位置按包分组，每个包只打开、顺序读一遍（索引一遍，取 FBX 和贴图时再读一遍）。素体包里自己的材质和贴图跟着一起进来，通常一两轮就齐了。
+- `Located::Package { location, guid }`：包的路径，可带 `#` 选 zip 里的包。`Located::Reader { name, open, guid }`：没有路径的包（冷归档），`open` 每次给一个新的 reader。`Located::File(path)`：单个文件（`.mat`、`.prefab`、FBX、图片）。
+- 主 prefab 仍然只从被预览的包里选，依赖包里的 prefab 不会抢主图，也不进候选列表。
+- 找不到时照常出图：缺的 prefab 和网格报 `missing_dependency`（通常就是缺素体），某个槽用了别的包的材质也报 `missing_dependency`（`usage` 是 `material`）。`serve` 回复里的 `missing_guids` 列出缺的 prefab、网格和材质。
+- 命令行和 `serve` 用现成的 `unity::Sources`：`unipeek info|thumb|view <输入> --with <包、zip 或文件夹>`，可以写多次；文件夹里的每个包都算一个来源。`serve` 的请求里写 `"with": ["D:/Assets/Base.unitypackage"]`。
+- shader 靠内置的 GUID 表识别（lilToon、VRChat Mobile、Unity 内置），不需要找到 shader 文件。
 
 ## 版本约定
 

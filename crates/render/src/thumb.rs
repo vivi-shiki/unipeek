@@ -161,8 +161,19 @@ impl Background {
 /// Load `location` (a path, optionally with `#inner/path`), render it and write `out` (`.png` or
 /// `.webp`) through a temporary file. Returns the report of the loaded scene.
 pub fn write_thumbnail(gpu: &Gpu, location: &str, out: &std::path::Path, opts: &ThumbOptions) -> Result<unipeek_unity::Report> {
+    write_thumbnail_with(gpu, location, out, opts, None)
+}
+
+/// Like `write_thumbnail`, finding GUIDs that are not in the package through `resolver`.
+pub fn write_thumbnail_with(
+    gpu: &Gpu,
+    location: &str,
+    out: &std::path::Path,
+    opts: &ThumbOptions,
+    resolver: Option<std::sync::Arc<dyn unipeek_unity::Resolver>>,
+) -> Result<unipeek_unity::Report> {
     let format = ImageFormat::from_path(out).ok_or_else(|| Error::Image(format!("{} must end with .png or .webp", out.display())))?;
-    let load = crate::LoadOptions { max_texture: (opts.size.saturating_mul(2)).clamp(256, 2048), ..Default::default() };
+    let load = crate::LoadOptions { max_texture: (opts.size.saturating_mul(2)).clamp(256, 2048), resolver, ..Default::default() };
     let mut scene = Scene::load(unipeek_unity::Input::from_location(location), &load)?;
     let t = std::time::Instant::now();
     let img = render_thumbnail(gpu, &scene, opts)?;

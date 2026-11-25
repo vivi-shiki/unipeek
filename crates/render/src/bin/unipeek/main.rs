@@ -2,19 +2,19 @@
 #[cfg(feature = "view")]
 mod view;
 
-use std::process::ExitCode;
+use std::{process::ExitCode, sync::Arc};
 use unipeek::{
     LoadOptions, Scene,
     gpu::Gpu,
     thumb::{self, Background, ThumbOptions, View},
-    unity::{IndexOptions, Input, Package, Report, Status},
+    unity::{IndexOptions, Input, Package, Report, Resolver, Sources, Status},
 };
 
 const USAGE: &str = "usage:
-  unipeek info  <input> [--json]
+  unipeek info  <input> [--json] [--with <package or folder>]...
   unipeek ls    <input>
-  unipeek thumb <input> -o <out.png|out.webp> [--size 512] [--view front|side|back|3q] [--bg transparent|#rrggbb[aa]] [--timings]
-  unipeek view  <input>
+  unipeek thumb <input> -o <out.png|out.webp> [--size 512] [--view front|side|back|3q] [--bg transparent|#rrggbb[aa]] [--timings] [--with <package or folder>]...
+  unipeek view  <input> [--with <package or folder>]...
   unipeek serve
   unipeek version
 
@@ -59,8 +59,12 @@ fn run(args: &[String]) -> Result<i32, Failure> {
     match command.as_str() {
         "info" => {
             let (input, flags) = input_and_flags(rest)?;
+            let (with, flags) = with_sources(flags)?;
+            if let Some(f) = flags.iter().find(|f| *f != "--json") {
+                return Err(Failure::Usage(format!("unknown option {f}")));
+            }
             let json = flags.iter().any(|f| f == "--json");
-            let scene = Scene::load(Input::from_location(input), &LoadOptions { decode_textures: false, ..Default::default() })?;
+            let scene = Scene::load(Input::from_location(input), &LoadOptions { decode_textures: false, resolver: with, ..Default::default() })?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&scene.report).unwrap_or_default());
             } else {
@@ -81,6 +85,7 @@ fn run(args: &[String]) -> Result<i32, Failure> {
         }
         "thumb" => {
             let (input, flags) = input_and_flags(rest)?;
+            let (with, flags) = with_sources(flags)?;
             let mut opts = ThumbOptions::default();
             let mut out = None;
             let mut timings = false;
@@ -106,7 +111,7 @@ fn run(args: &[String]) -> Result<i32, Failure> {
             for failed in &gpu.fallback {
                 eprintln!("fallback: {failed}");
             }
-            let report = thumb::write_thumbnail(&gpu, input, std::path::Path::new(&out), &opts)?;
+            let report = thumb::write_thumbnail_with(&gpu, input, std::path::Path::new(&out), &opts, with)?;
             for d in &report.degrades {
                 eprintln!("degraded: {}", serde_json::to_string(d).unwrap_or_default());
             }
@@ -118,10 +123,11 @@ fn run(args: &[String]) -> Result<i32, Failure> {
         }
         "view" => {
             let (input, flags) = input_and_flags(rest)?;
+            let (with, flags) = with_sources(flags)?;
             if let Some(f) = flags.first() {
                 return Err(Failure::Usage(format!("unknown option {f}")));
             }
-            view_window(input)
+            view_window(input, with)
         }
         "serve" => {
             let stdin = std::io::stdin().lock();
@@ -136,16 +142,32 @@ fn run(args: &[String]) -> Result<i32, Failure> {
     }
 }
 
+/// Take every `--with <package or folder>` out of the flags.
+fn with_sources(flags: &[String]) -> Result<(Option<Arc<dyn Resolver>>, Vec<String>), Failure> {
+    let mut with = Vec::new();
+    let mut rest = Vec::new();
+    let mut it = flags.iter();
+    while let Some(f) = it.next() {
+        if f == "--with" {
+            with.push(it.next().ok_or_else(|| Failure::Usage("--with needs a package or folder".into()))?.clone());
+        } else {
+            rest.push(f.clone());
+        }
+    }
+    let resolver: Option<Arc<dyn Resolver>> = (!with.is_empty()).then(|| Arc::new(Sources::new(&with, IndexOptions::default())) as Arc<dyn Resolver>);
+    Ok((resolver, rest))
+}
+
 #[cfg(feature = "view")]
-fn view_window(input: &str) -> Result<i32, Failure> {
-    view::run(input).or_else(|e| {
+fn view_window(input: &str, with: Option<Arc<dyn Resolver>>) -> Result<i32, Failure> {
+    view::run(input, with).or_else(|e| {
         eprintln!("error: {e}");
         Ok(3)
     })
 }
 
 #[cfg(not(feature = "view"))]
-fn view_window(_: &str) -> Result<i32, Failure> {
+fn view_window(_: &str, _: Option<Arc<dyn Resolver>>) -> Result<i32, Failure> {
     Err(Failure::Usage("this unipeek was built without the `view` feature".into()))
 }
 

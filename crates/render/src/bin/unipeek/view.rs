@@ -43,12 +43,12 @@ struct App {
     frames: u32,
 }
 
-pub fn run(location: &str) -> Result<i32, String> {
+pub fn run(location: &str, with: Option<std::sync::Arc<dyn unipeek::unity::Resolver>>) -> Result<i32, String> {
     let event_loop = EventLoop::new().map_err(|e| e.to_string())?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = App {
         location: location.to_string(),
-        loading: Loading::start(Input::from_location(location), LoadOptions::default()),
+        loading: Loading::start(Input::from_location(location), LoadOptions { resolver: with, ..Default::default() }),
         scene: None,
         orbit: Orbit::fit(unipeek::glam::Vec3::splat(-1.0), unipeek::glam::Vec3::splat(1.0)),
         shown: None,

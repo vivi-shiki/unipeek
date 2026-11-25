@@ -12,12 +12,12 @@ use std::{
     time::Instant,
 };
 use unipeek_unity::{
-    Degrade, fileid, Guid, IndexOptions, Input, Package, PackageIndex, Plan, Report, Timings,
+    Degrade, Resolver, fileid, Guid, IndexOptions, Input, Package, PackageIndex, Plan, Report, Timings,
     material::{Look, Material},
     meta::Meta,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct LoadOptions {
     pub index: IndexOptions,
     /// Longest side of a decoded texture; larger textures are scaled down before upload.
@@ -25,11 +25,25 @@ pub struct LoadOptions {
     /// Decode textures. Off for reports only: sizes come from the file headers and the scene's
     /// materials have no textures.
     pub decode_textures: bool,
+    /// Finds GUIDs the package needs but does not contain (base avatar, materials, textures in
+    /// other packages). Without one, they are reported as missing.
+    pub resolver: Option<Arc<dyn Resolver>>,
 }
 
 impl Default for LoadOptions {
     fn default() -> Self {
-        LoadOptions { index: IndexOptions::default(), max_texture: 2048, decode_textures: true }
+        LoadOptions { index: IndexOptions::default(), max_texture: 2048, decode_textures: true, resolver: None }
+    }
+}
+
+impl std::fmt::Debug for LoadOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadOptions")
+            .field("index", &self.index)
+            .field("max_texture", &self.max_texture)
+            .field("decode_textures", &self.decode_textures)
+            .field("resolver", &self.resolver.as_ref().map(|_| "..."))
+            .finish()
     }
 }
 
@@ -85,8 +99,29 @@ impl Scene {
         timings.index_ms = Timings::since(t);
         events(LoadEvent::Progress(0.3));
         let t = Instant::now();
-        let plan = Plan::new(&pkg.index, inner.as_deref())?;
+        let mut plan = Plan::new(&pkg.index, inner.as_deref())?;
+        if let Some(resolver) = &opts.resolver {
+            // Each round can bring in prefabs that need more (a base avatar's own materials are in
+            // its package, so one or two rounds are usual).
+            // The choice of prefab stays with the package itself, not with what dependencies add.
+            let chosen = inner.clone().or_else(|| plan.prefab.as_ref().map(|c| c.path.clone()));
+            let candidates = plan.candidates.clone();
+            let mut asked = BTreeSet::new();
+            for _ in 0..4 {
+                let need: Vec<Guid> = needed_elsewhere(&pkg.index, &plan).into_iter().filter(|g| asked.insert(*g)).collect();
+                if need.is_empty() || pkg.resolve(resolver.as_ref(), &need, &opts.index)?.is_empty() {
+                    break;
+                }
+                if chosen.is_none() {
+                    // Nothing to show on its own (an outfit without a model): keep the first plan.
+                    break;
+                }
+                plan = Plan::new(&pkg.index, chosen.as_deref())?;
+                plan.candidates = candidates.clone();
+            }
+        }
         let mut report = Report::new(desc, pkg.container, pkg.member.clone(), &pkg.index, &plan);
+        report.dependencies = pkg.dependencies().map(str::to_string).collect();
         timings.plan_ms = Timings::since(t);
 
         // Fetch models together with the textures their materials are likely to need, so a
@@ -259,6 +294,27 @@ fn decode_all(guids: &BTreeSet<Guid>, bytes: &BTreeMap<Guid, Arc<[u8]>>, max: u3
             .collect();
         handles.into_iter().map(|(g, h)| (g, h.join().unwrap_or_else(|_| Err("decoder panicked".into())))).collect()
     })
+}
+
+/// GUIDs the plan uses that the package does not have: prefabs, meshes and materials the prefab
+/// points at, and main textures of the materials it uses.
+fn needed_elsewhere(index: &PackageIndex, plan: &Plan) -> Vec<Guid> {
+    use unipeek_unity::prefab::Usage;
+    let absent = |g: &Guid| index.get(g).is_none_or(|e| e.size.is_none());
+    let mut out: BTreeSet<Guid> = plan.missing.iter().filter(|m| matches!(m.usage, Usage::Prefab | Usage::Mesh | Usage::Material | Usage::Texture)).map(|m| m.guid).collect();
+    let metas = plan.models.iter().filter_map(|m| index.get(&m.guid)?.meta.as_deref()).map(Meta::parse);
+    let overrides = plan.renderer_overrides.iter().flat_map(|o| o.materials.values().flatten().copied());
+    let mats = metas.flat_map(|m| m.external_materials.into_iter().filter_map(|(_, r)| r.guid)).chain(plan.prefab_materials.iter().copied()).chain(overrides);
+    for m in mats {
+        match index.get(&m).and_then(|e| e.text.as_deref()).and_then(Material::parse) {
+            Some(mat) => out.extend(mat.main_texture().and_then(|t| t.texture.guid).filter(|g| absent(g))),
+            None if absent(&m) => {
+                out.insert(m);
+            }
+            None => {}
+        }
+    }
+    out.into_iter().collect()
 }
 
 /// Main textures of the materials the models' `.meta` files and the prefab point at.

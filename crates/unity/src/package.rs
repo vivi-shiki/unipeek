@@ -214,6 +214,27 @@ impl PackageIndex {
         Ok(index)
     }
 
+    /// Add the entries of `other` whose GUIDs this index does not have. Returns their GUIDs.
+    pub fn merge_missing(&mut self, other: &PackageIndex) -> BTreeSet<Guid> {
+        let mut added = BTreeSet::new();
+        for e in other.entries.values() {
+            if !self.entries.contains_key(&e.guid) {
+                self.entries.insert(e.guid, e.clone());
+                added.insert(e.guid);
+            }
+        }
+        added
+    }
+
+    /// Add one entry, unless an entry with its GUID exists.
+    pub fn insert_missing(&mut self, entry: Entry) -> bool {
+        if self.entries.contains_key(&entry.guid) {
+            return false;
+        }
+        self.entries.insert(entry.guid, entry);
+        true
+    }
+
     pub(crate) fn from_loose(entries: Vec<Entry>) -> PackageIndex {
         PackageIndex { entries: entries.into_iter().map(|e| (e.guid, e)).collect(), issues: Vec::new(), stats: ReadStats { passes: 1, bytes: 0 } }
     }

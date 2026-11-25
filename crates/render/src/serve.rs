@@ -4,6 +4,7 @@
 //! Requests: `{"id": any, "op": "thumb", "source": "a.unitypackage#Assets/x.prefab", "out": "t.webp",
 //! "size": 512, "view": "3q", "background": "transparent"}`, `{"op": "info", "source": ...}` and
 //! `{"op": "version"}`. Every reply echoes `id` and has `status`: ok, degraded, unsupported or error.
+//! `thumb` and `info` take `"with": ["base.unitypackage", "D:/Assets"]` to find missing GUIDs.
 use crate::{
     LoadOptions, Scene,
     gpu::Gpu,
@@ -26,6 +27,9 @@ struct Request {
     size: Option<u32>,
     view: Option<String>,
     background: Option<String>,
+    /// Packages or folders to search for GUIDs the source does not contain.
+    #[serde(default)]
+    with: Vec<String>,
 }
 
 /// Serve requests until the input ends. Returns the process exit code (0 unless the output broke).
@@ -53,7 +57,7 @@ fn handle(req: Request, gpu: &mut Option<Result<Gpu, String>>) -> Value {
         "version" => json!({"id": id, "status": "ok", "version": env!("CARGO_PKG_VERSION"), "renderer_version": RENDERER_VERSION}),
         "info" => {
             let Some(source) = req.source else { return error(id, "info needs a source".into()) };
-            match Scene::load(Input::from_location(&source), &LoadOptions { decode_textures: false, ..Default::default() }) {
+            match Scene::load(Input::from_location(&source), &LoadOptions { decode_textures: false, resolver: resolver(&req.with), ..Default::default() }) {
                 Ok(scene) => {
                     let mut reply = summary(id, &scene.report);
                     reply["report"] = serde_json::to_value(&scene.report).unwrap_or(Value::Null);
@@ -80,7 +84,7 @@ fn handle(req: Request, gpu: &mut Option<Result<Gpu, String>>) -> Value {
                 Err(e) => return error(id, e.clone()),
             };
             let opts = ThumbOptions { size: req.size.unwrap_or(512).clamp(16, 4096), view, background };
-            match thumb::write_thumbnail(gpu, &source, Path::new(&out), &opts) {
+            match thumb::write_thumbnail_with(gpu, &source, Path::new(&out), &opts, resolver(&req.with)) {
                 Ok(report) => {
                     let mut reply = summary(id, &report);
                     reply["out"] = json!(out);
@@ -95,9 +99,13 @@ fn handle(req: Request, gpu: &mut Option<Result<Gpu, String>>) -> Value {
     }
 }
 
+fn resolver(with: &[String]) -> Option<std::sync::Arc<dyn unipeek_unity::Resolver>> {
+    (!with.is_empty()).then(|| std::sync::Arc::new(unipeek_unity::Sources::new(with, Default::default())) as std::sync::Arc<dyn unipeek_unity::Resolver>)
+}
+
 fn summary(id: Value, report: &Report) -> Value {
     let reasons: Vec<Value> = report.degrades.iter().filter_map(|d| serde_json::to_value(d).ok()?.get("kind").cloned()).collect();
-    let missing: Vec<String> = report.missing.iter().filter(|m| matches!(m.usage, Usage::Prefab | Usage::Mesh)).map(|m| m.guid.to_string()).collect();
+    let missing: Vec<String> = report.missing.iter().filter(|m| matches!(m.usage, Usage::Prefab | Usage::Mesh | Usage::Material)).map(|m| m.guid.to_string()).collect();
     json!({
         "id": id,
         "status": report.status,

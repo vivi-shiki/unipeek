@@ -21,6 +21,13 @@ overrides on FBX instances are applied.
   that a prefab makes on an instance of a model, by renderer, including materials added after the
   last submesh. `BindSource::PrefabOverride`. `Report::stale_overrides` counts overrides of objects the
   FBX no longer has; `material_overrides_ignored` now only means overrides that could not be matched.
+- `Resolver`, `Located`, `Sources` and `Package::resolve`: GUIDs a prefab needs from other packages
+  (nested prefabs such as the base avatar, meshes, materials and their textures) are looked up in one
+  batch per round, grouped by package, and merged in; each package is opened once.
+  `Package::add_dependency`, `PackageIndex::merge_missing`, `Report::dependencies`.
+- A material slot that uses a material from another package is reported as `missing_dependency`
+  (usage `material`).
+- Prefab renderers match FBX nodes by the mesh's file ID first, so renamed game objects still bind.
 - VRChat SDK mobile shaders (Toon Lit, MatCap Lit, ...) are recognized (`ShaderFamily::VrchatMobile`).
 
 ### unipeek
@@ -39,6 +46,9 @@ overrides on FBX instances are applied.
   scene. `Orbit::reset` and `Orbit::preset`; `View::angles` is public.
 - `unipeek view <input>`: a window of its own (feature `view`, on by default, brings in winit for the
   binary only).
+- `LoadOptions::resolver`, `write_thumbnail_with`; `--with <package or folder>` (repeatable) for `info`,
+  `thumb` and `view`; `"with": [...]` in serve requests. `missing_guids` in serve replies also lists
+  materials.
 - `serve::Worker`: the host side of `serve`. Runs the child process, restarts it after it dies or
   times out, and returns an error only for the request that was in flight.
 - Fully transparent thumbnail pixels are always black (they used to keep a little blended color

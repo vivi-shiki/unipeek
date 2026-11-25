@@ -505,3 +505,21 @@ fn viewport_speed() {
         assert!(per_frame <= 5.0, "{per_frame:.2} ms per frame");
     }
 }
+
+/// M5: packages with `with` sources from the manifest's `resolve` list.
+#[test]
+fn resolver_with_local_packages() {
+    let _shared = shared();
+    let Some((root, manifest)) = samples("resolver_with_local_packages") else { return };
+    for case in manifest["resolve"].as_array().map(Vec::as_slice).unwrap_or_default() {
+        let rel = case["path"].as_str().unwrap();
+        let with: Vec<String> = case["with"].as_array().unwrap().iter().map(|w| location(&root, w.as_str().unwrap())).collect();
+        let resolver = std::sync::Arc::new(unipeek::unity::Sources::new(&with, IndexOptions::default()));
+        let t = Instant::now();
+        let scene = Scene::load(Input::from_location(&location(&root, rel)), &LoadOptions { resolver: Some(resolver), decode_textures: false, ..Default::default() }).unwrap();
+        let r = &scene.report;
+        println!("local: {rel} with {with:?}: {:?}, {} dependencies, {} triangles, {} pass(es) in {:?}", r.status, r.dependencies.len(), scene.triangles(), r.read.passes, t.elapsed());
+        assert_eq!(status_name(r.status), case["expect"]["status"], "{rel}: {:?}", r.degrades);
+        assert_eq!(r.dependencies.len() as u64, case["expect"]["dependencies"].as_u64().unwrap(), "{rel}");
+    }
+}

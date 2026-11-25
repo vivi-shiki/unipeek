@@ -32,6 +32,8 @@ pub struct Package {
     /// The `.unitypackage` picked inside a zip or folder.
     pub member: Option<String>,
     origin: Origin,
+    /// Packages merged in through a `Resolver`, with the GUIDs each one supplied.
+    deps: Vec<(String, Package, BTreeSet<Guid>)>,
 }
 
 enum Origin {
@@ -77,7 +79,7 @@ impl Package {
         match detect(&head, &source) {
             Some(Detected::UnityPackage) => {
                 let index = index_source(source, opts)?;
-                Ok((Package { index: index.0, container: Container::UnityPackage, member: None, origin: Origin::Package(index.1) }, inner.next()))
+                Ok((Package { index: index.0, container: Container::UnityPackage, member: None, origin: Origin::Package(index.1), deps: Vec::new() }, inner.next()))
             }
             Some(Detected::Zip) => {
                 let zip = match source {
@@ -96,8 +98,63 @@ impl Package {
         }
     }
 
-    /// Bytes of FBX and texture assets, reading the input again when needed.
+    /// Bytes of FBX and texture assets, reading the input again when needed. Assets that came from
+    /// merged dependencies are read from their own packages, each at most once.
     pub fn read_assets(&mut self, wanted: &BTreeSet<Guid>) -> Result<BTreeMap<Guid, Arc<[u8]>>> {
+        let mut own = wanted.clone();
+        let mut out = BTreeMap::new();
+        for (_, dep, supplied) in &mut self.deps {
+            let theirs: BTreeSet<Guid> = own.intersection(supplied).copied().collect();
+            if theirs.is_empty() {
+                continue;
+            }
+            own.retain(|g| !theirs.contains(g));
+            let before = dep.index.stats;
+            out.extend(dep.read_assets(&theirs)?);
+            self.index.stats.passes += dep.index.stats.passes - before.passes;
+            self.index.stats.bytes += dep.index.stats.bytes - before.bytes;
+        }
+        out.extend(self.read_own(&own)?);
+        Ok(out)
+    }
+
+    /// Merge the index of `dep` (found through a `Resolver` at `location`): its entries that this
+    /// package lacks become visible to planning, and their bytes are read from `dep`.
+    /// Returns how many entries were added.
+    pub fn add_dependency(&mut self, location: String, dep: Package) -> usize {
+        let added = self.index.merge_missing(&dep.index);
+        let count = added.len();
+        self.index.stats.passes += dep.index.stats.passes;
+        self.index.stats.bytes += dep.index.stats.bytes;
+        if count > 0 {
+            self.deps.push((location, dep, added));
+        }
+        count
+    }
+
+    /// Where the merged dependencies came from, in the order they were added.
+    pub fn dependencies(&self) -> impl Iterator<Item = &str> {
+        self.deps.iter().map(|(l, _, _)| l.as_str())
+    }
+
+    fn read_own(&mut self, wanted: &BTreeSet<Guid>) -> Result<BTreeMap<Guid, Arc<[u8]>>> {
+        // Files a resolver supplied keep their bytes in the index, whatever this package's origin.
+        let mut kept = BTreeMap::new();
+        for g in wanted {
+            if let Some(b) = self.index.get(g).and_then(|e| e.bytes.clone()) {
+                kept.insert(*g, b);
+            }
+        }
+        let wanted: BTreeSet<Guid> = wanted.iter().filter(|g| !kept.contains_key(g)).copied().collect();
+        if wanted.is_empty() {
+            return Ok(kept);
+        }
+        let mut out = self.read_origin(&wanted)?;
+        out.extend(kept);
+        Ok(out)
+    }
+
+    fn read_origin(&mut self, wanted: &BTreeSet<Guid>) -> Result<BTreeMap<Guid, Arc<[u8]>>> {
         match &mut self.origin {
             Origin::Package(source) if source.reopenable() => self.index.read_assets(source.open()?, wanted),
             Origin::Package(_) | Origin::Kept => self.index.read_assets(io::empty(), wanted),
@@ -194,7 +251,7 @@ fn open_zip(zip: ZipData, inner: &mut impl Iterator<Item = String>, opts: &Index
         let opts = IndexOptions { keep_binaries: false, ..opts.clone() };
         let index = PackageIndex::read(member, &opts)?;
         let next = if first.as_deref().is_some_and(is_container) { inner.next() } else { first };
-        let pkg = Package { index, container: Container::Zip, member: Some(name), origin: Origin::ZipMember { zip, index: i } };
+        let pkg = Package { index, container: Container::Zip, member: Some(name), origin: Origin::ZipMember { zip, index: i }, deps: Vec::new() };
         return Ok((pkg, next));
     }
     let mut entries = Vec::new();
@@ -213,7 +270,7 @@ fn open_zip(zip: ZipData, inner: &mut impl Iterator<Item = String>, opts: &Index
         };
         entries.push(Entry::loose(name, size, kind, (!bytes.is_empty()).then(|| Arc::from(bytes))));
     }
-    let pkg = Package { index: PackageIndex::from_loose(entries), container: Container::Zip, member: None, origin: Origin::Kept };
+    let pkg = Package { index: PackageIndex::from_loose(entries), container: Container::Zip, member: None, origin: Origin::Kept, deps: Vec::new() };
     Ok((pkg, first))
 }
 
@@ -222,10 +279,10 @@ fn open_folder(dir: &Path, opts: &IndexOptions) -> Result<Package> {
     let packages = files.iter().filter(|(rel, _, _)| rel.to_ascii_lowercase().ends_with(".unitypackage"));
     if let Some((rel, path, _)) = packages.max_by_key(|(_, _, size)| *size) {
         let (index, source) = index_source(Source::Path(path.clone()), opts)?;
-        return Ok(Package { index, container: Container::Folder, member: Some(rel.clone()), origin: Origin::Package(source) });
+        return Ok(Package { index, container: Container::Folder, member: Some(rel.clone()), origin: Origin::Package(source), deps: Vec::new() });
     }
     let (index, map) = loose_files(files);
-    Ok(Package { index, container: Container::Folder, member: None, origin: Origin::Files(map) })
+    Ok(Package { index, container: Container::Folder, member: None, origin: Origin::Files(map), deps: Vec::new() })
 }
 
 fn open_model(source: Source, opts: &IndexOptions) -> Result<Package> {
@@ -238,13 +295,13 @@ fn open_model(source: Source, opts: &IndexOptions) -> Result<Package> {
             let mut files: Vec<_> = walk_limited(&dir, 3).into_iter().filter(|(_, p, _)| p != &path && loose_kind(&p.to_string_lossy()).is_some_and(|k| k != AssetKind::Fbx)).collect();
             files.push((name, path, size));
             let (index, map) = loose_files(files);
-            Ok(Package { index, container: Container::Model, member: None, origin: Origin::Files(map) })
+            Ok(Package { index, container: Container::Model, member: None, origin: Origin::Files(map), deps: Vec::new() })
         }
         mut other => {
             let mut bytes = Vec::new();
             other.open()?.take(opts.max_binary_bytes).read_to_end(&mut bytes)?;
             let entry = Entry::loose("model.fbx".into(), bytes.len() as u64, AssetKind::Fbx, Some(Arc::from(bytes)));
-            Ok(Package { index: PackageIndex::from_loose(vec![entry]), container: Container::Model, member: None, origin: Origin::Kept })
+            Ok(Package { index: PackageIndex::from_loose(vec![entry]), container: Container::Model, member: None, origin: Origin::Kept, deps: Vec::new() })
         }
     }
 }

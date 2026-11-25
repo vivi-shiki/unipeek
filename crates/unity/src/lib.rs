@@ -9,6 +9,7 @@ pub mod package;
 pub mod plan;
 pub mod prefab;
 pub mod report;
+pub mod resolve;
 pub mod shader;
 pub mod source;
 #[cfg(any(test, feature = "testing"))]
@@ -20,5 +21,6 @@ pub use guid::Guid;
 pub use load::{Container, Package};
 pub use plan::{Binding, Plan};
 pub use report::{Degrade, Report, Status, Timings};
+pub use resolve::{Located, Resolver, Sources};
 pub use package::{AssetKind, Entry, IndexOptions, PackageIndex, PackageIssue, ReadStats};
 pub use source::{Input, Source};

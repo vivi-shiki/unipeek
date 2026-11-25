@@ -117,6 +117,8 @@ pub struct Report {
     pub timings: Timings,
     /// `m_Materials` overrides of objects that are no longer in the model; Unity ignores them too.
     pub stale_overrides: usize,
+    /// Packages a `Resolver` supplied assets from, in the order they were read.
+    pub dependencies: Vec<String>,
     pub status: Status,
 }
 
@@ -136,6 +138,7 @@ impl Report {
             read: index.stats,
             timings: Timings::default(),
             stale_overrides: 0,
+            dependencies: Vec::new(),
             status: Status::Ok,
         };
         if plan.models.is_empty() {
@@ -158,6 +161,17 @@ impl Report {
     pub fn add_binding(&mut self, model: &str, slot: &str, binding: &Binding) {
         let material = binding.material_name.clone();
         let label = material.clone().unwrap_or_else(|| slot.to_string());
+        if let Some(g) = binding.material
+            && binding.material_path.is_none()
+        {
+            // The slot names a material from another package; it is drawn white.
+            self.degrade(Degrade::MissingDependency { guid: g, usage: Usage::Material });
+            let missing = MissingRef { guid: g, usage: Usage::Material };
+            if !self.missing.contains(&missing) {
+                self.missing.push(missing);
+                self.missing.sort();
+            }
+        }
         if binding.source == BindSource::Unbound {
             self.degrade(Degrade::MissingMaterial { model: model.to_string(), slot: slot.to_string() });
         }
