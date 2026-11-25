@@ -192,3 +192,36 @@ fn gpu_fallback_is_recorded() {
     assert!(!gpu.describe().is_empty());
     assert!(unipeek::Gpu::headless().unwrap().describe().contains(':'));
 }
+
+#[test]
+fn one_prefab_inside_a_package_by_its_path() {
+    let Some(gpu) = gpu("inner_prefab") else { return };
+    // A second prefab paints both quads blue through an override of the model's renderer.
+    let renderer = unipeek::unity::fileid::component(&unipeek::unity::fileid::node_path(&["Quads"], 1), "MeshRenderer");
+    let mut bytes = Vec::new();
+    let red = material_yaml("Red", LILTOON, 4800000, Some(RED_TEX), -1).replace("_Color: {r: 1, g: 0.5, b: 0.25, a: 1}", "_Color: {r: 1, g: 1, b: 1, a: 1}");
+    let blue_mat = material_yaml("Blue", LILTOON, 4800000, Some(BLUE_TEX), -1).replace("_Color: {r: 1, g: 0.5, b: 0.25, a: 1}", "_Color: {r: 1, g: 1, b: 1, a: 1}");
+    bytes.extend(
+        PackageBuilder::new()
+            .asset_with_meta(MODEL, "Assets/Shop/Quads.fbx", fbx_ascii(&["Red", "Blue"]), model_meta(MODEL, &[("Red", RED_MAT), ("Blue", BLUE_MAT)]))
+            .asset(RED_MAT, "Assets/Shop/Red.mat", red)
+            .asset(BLUE_MAT, "Assets/Shop/Blue.mat", blue_mat)
+            .asset(RED_TEX, "Assets/Shop/Red.png", png(8, 8, [255, 0, 0, 255]))
+            .asset(BLUE_TEX, "Assets/Shop/Blue.png", png(8, 8, [0, 0, 255, 255]))
+            .asset(PREFAB, "Assets/Shop/Quads.prefab", prefab_instancing(MODEL, &[]))
+            .asset("dddddddddddddddddddddddddddddddd", "Assets/Shop/Quads_Blue.prefab", prefab_instancing(MODEL, &[(renderer, 0, BLUE_MAT)]))
+            .build(),
+    );
+    let dir = std::env::temp_dir().join(format!("unipeek-inner-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("Quads.unitypackage");
+    std::fs::write(&file, &bytes).unwrap();
+    let main = thumb::write_thumbnail(&gpu, &file.display().to_string(), &dir.join("main.png"), &opts(View::Front)).unwrap();
+    let inner = thumb::write_thumbnail(&gpu, &format!("{}#Assets/Shop/Quads_Blue.prefab", file.display()), &dir.join("inner.png"), &opts(View::Front)).unwrap();
+    assert_eq!(main.prefab.as_deref(), Some("Assets/Shop/Quads.prefab"));
+    assert_eq!(inner.prefab.as_deref(), Some("Assets/Shop/Quads_Blue.prefab"));
+    let (red_left, _, _, _) = colors(&image::open(dir.join("main.png")).unwrap().to_rgba8());
+    let (red_left_inner, _, blue_left_inner, _) = colors(&image::open(dir.join("inner.png")).unwrap().to_rgba8());
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(red_left > 100 && red_left_inner == 0 && blue_left_inner > 100, "{red_left} {red_left_inner} {blue_left_inner}");
+}

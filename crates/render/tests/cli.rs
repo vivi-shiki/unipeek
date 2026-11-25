@@ -88,3 +88,22 @@ fn thumb_writes_an_image() {
     assert_eq!(img.dimensions(), (48, 48));
     assert_eq!(img.get_pixel(0, 0).0, [0x10, 0x20, 0x30, 255]);
 }
+
+#[test]
+fn view_opens_a_window_or_says_why_not() {
+    let dir = Dir::new("view");
+    let pkg = dir.file("Quads.unitypackage", &two_quads());
+    let out = Command::new(env!("CARGO_BIN_EXE_unipeek")).args(["view", &pkg]).env("UNIPEEK_VIEW_SECS", "2").output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    match out.status.code() {
+        Some(0) => assert!(err.contains("view: ") && err.contains("4 triangles, textures loaded: true"), "{err}"),
+        // Machines without a display or GPU cannot open the window; that is an error, not a crash.
+        Some(3) => {
+            assert!(err.contains("error: "), "{err}");
+            println!("skipped: view_opens_a_window_or_says_why_not: {err}");
+        }
+        other => panic!("exit {other:?}: {err}"),
+    }
+    let (code, _, err) = unipeek(&["view"]);
+    assert_eq!(code, 64, "{err}");
+}

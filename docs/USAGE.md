@@ -2,7 +2,7 @@
 
 结论：Snowcase 在 `Cargo.toml` 里按名字依赖 `unipeek`，不用复制代码。`formats` 依赖只管解析的 `unipeek-unity`，`app` 依赖带渲染的 `unipeek`。缩略图在 `snowcase.exe --thumb-worker` 子进程里调 `unipeek::serve`，详情预览用 `Viewport::offscreen` 读回给 `RenderImage`。
 
-状态：2026-11-24 更新到 `0.1.0-alpha.2`。缩略图、`serve`、`info` 和命令行已经实现并有测试；「详情预览」（M4）和「跨包依赖」（M5）两节还是计划稿。写给 Snowcase 的接入方（Map1en），决定的来由见 [INTEGRATION「接入决定」](INTEGRATION.md#接入决定m02026-11-24)。
+状态：2026-11-26 按 `dev/m1-m6` 分支更新（下一个版本）。缩略图、`serve`、`info`、命令行和「详情预览」（M4）已经实现并有测试；「跨包依赖」（M5）一节还是计划稿。写给 Snowcase 的接入方（Map1en），决定的来由见 [INTEGRATION「接入决定」](INTEGRATION.md#接入决定m02026-11-24)。
 
 仓库：<https://github.com/vivi-shiki/unipeek>，MIT OR Apache-2.0，可以进 GPL-3.0 的 Snowcase；反过来 Snowcase 的代码不能进 unipeek。
 
@@ -11,13 +11,13 @@
 | crate | 内容 | 谁依赖 |
 |---|---|---|
 | `unipeek-unity` | 流式读 unitypackage、Unity YAML、prefab → `.mat` → 贴图、`Report`；不依赖 GPU，CI 能测 | `formats`（以后换掉自己的 `list_unitypackage` 时） |
-| `unipeek` | wgpu + ufbx 渲染：缩略图、`serve`、命令行（以后加 `Viewport`）；以 `unipeek::unity` 重新导出 `unipeek-unity`，不用两个都写 | `app` |
+| `unipeek` | wgpu + ufbx 渲染：缩略图、`serve`、`Viewport`、命令行；以 `unipeek::unity` 重新导出 `unipeek-unity`，不用两个都写 | `app` |
 
 已经发到 crates.io（`0.1.0-alpha.2` 起）：
 
 ```toml
 # app/Cargo.toml
-unipeek = { version = "0.1.0-alpha.2", default-features = false }   # 不要 unipeek 命令行时关掉 cli
+unipeek = { version = "0.1.0-alpha.2", default-features = false }   # 关掉 cli 和 view（view 会带进 winit）
 
 # formats/Cargo.toml（以后）
 unipeek-unity = "0.1.0-alpha.2"
@@ -111,31 +111,42 @@ opt-level = 3
 unipeek info  <输入> [--json]        # 报告，不需要 GPU
 unipeek ls    <输入>                 # 包里的文件
 unipeek thumb <输入> -o out.webp [--size 512] [--view 3q] [--bg transparent] [--timings]
+unipeek view  <输入>                 # 独立窗口：左键转，右键或中键平移，滚轮缩放，R 复位，1-4 视角
 unipeek serve
 unipeek version
 ```
 
 退出码：0 正常，1 降级，2 不支持，3 出错，64 参数不对。
 
-## 详情预览（M4，计划稿）
+## 详情预览（M4）
 
-第一版只有读回：unipeek 离屏渲染，交出 BGRA 字节，Snowcase 包成 GPUI 的 `RenderImage`。460 px 的抽屉每帧约 1 ms。
+只有读回：unipeek 离屏渲染，交出 BGRA 字节，Snowcase 包成 GPUI 的 `RenderImage`。150% DPI 下 460 px 的抽屉约 690²，每帧渲染加读回约 1.1 ms（RTX 2060，release）。
 
-```rust,ignore
-let mut view = unipeek::Viewport::offscreen(&gpu, width, height);
-let loading = view.load(source, inner); // 后台线程；先出白模，贴图解码完再换上
+```rust,no_run
+fn drawer(gpu: &unipeek::Gpu) -> Result<(), unipeek::Error> {
+    let mut view = unipeek::Viewport::offscreen(gpu, 690, 690);
+    // 后台线程加载；先出白模，贴图解码完再换上，相机不动
+    view.load(unipeek::Input::from_location("D:/Assets/Example.unitypackage"), unipeek::LoadOptions::default());
 
-// 鼠标事件
-view.orbit().rotate(dx, dy);
-view.orbit().zoom(steps);
-
-// 每次重绘
-if let Some(bgra) = view.render() { // 相机和场景都没变时返回 None，不重渲
-    // 转成 RenderImage 显示
+    // 每次重绘前
+    view.update(); // 取回加载结果；返回 true 表示场景变了
+    let _progress = view.progress(); // Some(0.0..=1.0) 表示还在加载
+    // 鼠标事件
+    view.orbit().rotate(12.0, 0.0); // 拖动的像素增量
+    view.orbit().zoom(1.0); // 滚轮格数
+    // 渲染：相机、尺寸、场景、背景都没变时返回 None，不重渲
+    if let Some(bgra) = view.render()? {
+        let _ = bgra; // width * height * 4 字节，sRGB，straight alpha
+    }
+    Ok(())
 }
 ```
 
-报告：`view.report()` 或 `serve` 的 `info` 请求返回 `unipeek::Report`（`serde::Serialize`）：选中的 prefab 和候选、三角形 / 骨骼 / BlendShape 数、材质和 shader、贴图尺寸、缺失的外部 GUID、降级原因。
+- `resize(w, h)` 改尺寸（物理像素）；`set_background(Background::Transparent)` 要透明背景，默认是深灰。
+- `orbit()` 还有 `pan`、`reset`（正面）、`preset(View::Side)` 等。
+- `report()` 是当前场景的报告；`error()` 是上次 `load` 失败的原因，失败时旧场景保留。
+- 不想用 `Viewport` 的加载时，`unipeek::Loading::start(input, opts)` 单独在后台加载，`poll()` 先给 `Loaded::Untextured` 再给 `Loaded::Textured`；`set_scene` 把场景交给视口。
+- 包文件树里某一个 prefab 的缩略图：`source` 写成 `Example.unitypackage#Assets/…/X.prefab`，和商品主图是同一个请求。
 
 ## 跨包依赖（素体，M5，计划稿）
 

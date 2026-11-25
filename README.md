@@ -34,6 +34,7 @@ Model files are never committed. Pass the paths on the command line.
 ```
 cargo run --release -p unipeek -- info  <input> [--json]
 cargo run --release -p unipeek -- thumb <input> -o out/thumb.webp --size 512 --view 3q
+cargo run --release -p unipeek -- view  <input>
 cargo run --release -p unipeek -- serve
 cargo run -p preview -- readback <input> 1100x800
 cargo run -p preview --features fast --target-dir target-fast -- fast <input> 1100x800

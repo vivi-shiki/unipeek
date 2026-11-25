@@ -194,8 +194,8 @@
 
 ### 完成标准
 
-- [ ] preview-lab 的 `readback` 模式改为只用 `unipeek` 公开 API，功能不变。
-- [ ] 460 px 抽屉（150% DPI 下约 690²）里，拖动时每帧渲染加读回不超过 5 ms ～；首帧白模 1 秒内出来。
+- [x] preview-lab 的 `readback` 模式改为只用 `unipeek` 公开 API，功能不变。2026-11-26：改用 `Viewport`，`backend::Readback` 删掉了。
+- [x] 460 px 抽屉（150% DPI 下约 690²）里，拖动时每帧渲染加读回不超过 5 ms；首帧白模 1 秒内出来。2026-11-26（RTX 2060，release，本机最大的样本，7 万三角形）：每帧 1.08 ms，白模 0.63 s 上屏，贴图 1.09 s 换上（`local_samples::viewport_speed`）。preview-lab 里 `readback` 每帧 1.7 ms（含转成 `RenderImage`）。
 
 ## M5 跨包 `Resolver`
 

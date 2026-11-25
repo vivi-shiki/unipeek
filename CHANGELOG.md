@@ -33,6 +33,12 @@ overrides on FBX instances are applied.
 - `unipeek thumb --timings` prints where the time went, including GPU start-up.
 - Prefab `m_Materials` overrides on FBX instances are applied; a material added after the last submesh
   draws that submesh again, as in Unity.
+- `Viewport::offscreen`: offscreen BGRA frames for a host UI, redrawn only when the camera, size, scene
+  or background changed; `load` on a background thread shows the untextured model first.
+  `Loading` does the same without a viewport. `Scene::load_with` reports progress and the untextured
+  scene. `Orbit::reset` and `Orbit::preset`; `View::angles` is public.
+- `unipeek view <input>`: a window of its own (feature `view`, on by default, brings in winit for the
+  binary only).
 - `serve::Worker`: the host side of `serve`. Runs the child process, restarts it after it dies or
   times out, and returns an error only for the request that was in flight.
 - Fully transparent thumbnail pixels are always black (they used to keep a little blended color

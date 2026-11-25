@@ -23,6 +23,7 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 flate2.workspace = true
+winit = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow.workspace = true
@@ -30,9 +31,11 @@ unipeek-unity = { workspace = true, features = ["testing"] }
 tar.workspace = true
 
 [features]
-default = ["cli"]
+default = ["cli", "view"]
 # The `unipeek` binary. Hosts that only link the library can turn it off.
 cli = []
+# `unipeek view`, a window of its own (winit). Only the binary uses it; the library never does.
+view = ["cli", "dep:winit"]
 
 [[bin]]
 name = "unipeek"

@@ -1,4 +1,7 @@
 //! The `unipeek` command line. Exit codes: 0 ok, 1 degraded, 2 unsupported, 3 error, 64 usage.
+#[cfg(feature = "view")]
+mod view;
+
 use std::process::ExitCode;
 use unipeek::{
     LoadOptions, Scene,
@@ -11,6 +14,7 @@ const USAGE: &str = "usage:
   unipeek info  <input> [--json]
   unipeek ls    <input>
   unipeek thumb <input> -o <out.png|out.webp> [--size 512] [--view front|side|back|3q] [--bg transparent|#rrggbb[aa]] [--timings]
+  unipeek view  <input>
   unipeek serve
   unipeek version
 
@@ -112,6 +116,13 @@ fn run(args: &[String]) -> Result<i32, Failure> {
             }
             Ok(status_code(&report))
         }
+        "view" => {
+            let (input, flags) = input_and_flags(rest)?;
+            if let Some(f) = flags.first() {
+                return Err(Failure::Usage(format!("unknown option {f}")));
+            }
+            view_window(input)
+        }
         "serve" => {
             let stdin = std::io::stdin().lock();
             let stdout = std::io::stdout().lock();
@@ -123,6 +134,19 @@ fn run(args: &[String]) -> Result<i32, Failure> {
         }
         other => Err(Failure::Usage(format!("unknown command {other:?}"))),
     }
+}
+
+#[cfg(feature = "view")]
+fn view_window(input: &str) -> Result<i32, Failure> {
+    view::run(input).or_else(|e| {
+        eprintln!("error: {e}");
+        Ok(3)
+    })
+}
+
+#[cfg(not(feature = "view"))]
+fn view_window(_: &str) -> Result<i32, Failure> {
+    Err(Failure::Usage("this unipeek was built without the `view` feature".into()))
 }
 
 fn input_and_flags(rest: &[String]) -> Result<(&str, &[String]), Failure> {
