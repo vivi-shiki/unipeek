@@ -8,6 +8,8 @@ pub struct Vertex {
     pub pos: [f32; 3],
     pub normal: [f32; 3],
     pub uv: [f32; 2],
+    /// MikkTSpace tangent and bitangent sign; only filled when a material has a normal map.
+    pub tangent: [f32; 4],
 }
 
 pub struct Part {
@@ -40,6 +42,35 @@ fn load_opts() -> ufbx::LoadOpts<'static> {
         generate_missing_normals: true,
         ..Default::default()
     }
+}
+
+/// MikkTSpace tangents for a triangle list, the same tangent space Blender and Unity bake normal
+/// maps in. Returns false when the geometry is degenerate.
+pub fn generate_tangents(vertices: &mut [Vertex]) -> bool {
+    struct Triangles<'a>(&'a mut [Vertex]);
+    impl mikktspace::Geometry for Triangles<'_> {
+        fn num_faces(&self) -> usize {
+            self.0.len() / 3
+        }
+        fn num_vertices_of_face(&self, _: usize) -> usize {
+            3
+        }
+        fn position(&self, face: usize, vert: usize) -> [f32; 3] {
+            self.0[face * 3 + vert].pos
+        }
+        fn normal(&self, face: usize, vert: usize) -> [f32; 3] {
+            self.0[face * 3 + vert].normal
+        }
+        fn tex_coord(&self, face: usize, vert: usize) -> [f32; 2] {
+            // Textures are stored top-down; MikkTSpace wants the FBX orientation back.
+            let [u, v] = self.0[face * 3 + vert].uv;
+            [u, 1.0 - v]
+        }
+        fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
+            self.0[face * 3 + vert].tangent = tangent;
+        }
+    }
+    vertices.len() >= 3 && mikktspace::generate_tangents(&mut Triangles(vertices))
 }
 
 impl Model {
@@ -111,6 +142,7 @@ impl Model {
                             normal: nv.to_array(),
                             // FBX UV origin is bottom-left, textures are top-left.
                             uv: [uv.x as f32, 1.0 - uv.y as f32],
+                            tangent: [1.0, 0.0, 0.0, 1.0],
                         });
                     }
                 }

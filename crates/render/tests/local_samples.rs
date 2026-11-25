@@ -18,7 +18,7 @@ use unipeek::{
     unity::{IndexOptions, Input, PackageIndex, Status},
 };
 
-/// The 3 GB test measures this process's memory, so it runs alone: it takes the write lock,
+/// The 3 GB test measures this process's memory and the viewport test measures time, so they run alone: they take the write lock,
 /// every other test here a read lock.
 static EXCLUSIVE: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
@@ -472,8 +472,9 @@ fn psd_composites_decode() {
 /// The limits are only checked in release builds.
 #[test]
 fn viewport_speed() {
-    let _shared = shared();
     let Some((root, manifest)) = samples("viewport_speed") else { return };
+    // Timing needs the GPU and the CPU to itself.
+    let _alone = EXCLUSIVE.write().unwrap_or_else(|e| e.into_inner());
     let Some(gpu) = common::gpu("viewport_speed") else { return };
     let biggest = manifest["samples"].as_array().unwrap().iter().filter(|s| s["path"].as_str().unwrap().ends_with(".unitypackage")).max_by_key(|s| s["expect"]["triangles"].as_u64().unwrap()).unwrap();
     let rel = biggest["path"].as_str().unwrap();

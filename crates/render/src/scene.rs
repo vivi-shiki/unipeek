@@ -2,7 +2,7 @@
 //! decoded and mip-mapped textures, and the report. Loading never touches the GPU.
 use crate::{
     Result,
-    model::{Model, Vertex},
+    model::{self, Model, Vertex},
     texture,
 };
 use glam::Vec3;
@@ -53,6 +53,10 @@ pub struct SceneMaterial {
     pub look: Look,
     /// RGBA8 mip chain, largest first.
     pub texture: Option<Arc<[image::RgbaImage]>>,
+    /// Tangent-space normal map (linear, not sRGB), when the look uses one.
+    pub normal: Option<Arc<[image::RgbaImage]>>,
+    pub emission: Option<Arc<[image::RgbaImage]>>,
+    pub matcap: Option<Arc<[image::RgbaImage]>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -158,6 +162,7 @@ impl Scene {
         let t = Instant::now();
         let mut materials: Vec<SceneMaterial> = Vec::new();
         let mut material_textures: Vec<Option<Guid>> = Vec::new();
+        let mut material_maps: Vec<unipeek_unity::material::Maps> = Vec::new();
         let mut material_slots: Vec<(String, String)> = Vec::new();
         let mut slots: BTreeMap<(Guid, String, usize, String), usize> = BTreeMap::new();
         let mut vertices = Vec::new();
@@ -181,7 +186,15 @@ impl Scene {
                     *slots.entry(key).or_insert_with(|| {
                         let binding = binding();
                         report.add_binding(&planned.path, &label, &binding);
-                        materials.push(SceneMaterial { name: binding.material_name.clone().unwrap_or_else(|| label.clone()), look: binding.look, texture: None });
+                        materials.push(SceneMaterial {
+                            name: binding.material_name.clone().unwrap_or_else(|| label.clone()),
+                            look: binding.look,
+                            texture: None,
+                            normal: None,
+                            emission: None,
+                            matcap: None,
+                        });
+                        material_maps.push(binding.maps);
                         material_textures.push(binding.main_texture.filter(|t| t.in_package).map(|t| t.guid));
                         material_slots.push((planned.path.clone(), label.clone()));
                         materials.len() - 1
@@ -220,19 +233,23 @@ impl Scene {
         if models.is_empty() {
             (min, max) = (Vec3::ZERO, Vec3::ZERO);
         }
+        if material_maps.iter().any(|m| m.normal.is_some()) {
+            model::generate_tangents(&mut vertices);
+        }
         let scene = Scene { vertices, parts, materials, min, max, report };
         events(LoadEvent::Progress(0.7));
         events(LoadEvent::Untextured(&scene));
         let Scene { parts, vertices, mut materials, mut report, .. } = scene;
-        let missing: BTreeSet<Guid> = material_textures.iter().flatten().filter(|g| !bytes.contains_key(g)).copied().collect();
+        let map_guids = material_maps.iter().flat_map(|m| [m.normal, m.emission, m.matcap]).flatten();
+        let all: BTreeSet<Guid> = material_textures.iter().flatten().copied().chain(map_guids).collect();
+        let missing: BTreeSet<Guid> = all.iter().filter(|g| !bytes.contains_key(g)).copied().collect();
         if !missing.is_empty() {
             let t = Instant::now();
             bytes.extend(pkg.read_assets(&missing)?);
             timings.read_ms += Timings::since(t);
         }
-        let unique: BTreeSet<Guid> = material_textures.iter().flatten().copied().collect();
         let t = Instant::now();
-        let decoded = decode_all(&unique, &bytes, opts.max_texture, opts.decode_textures);
+        let decoded = decode_all(&all, &bytes, opts.max_texture, opts.decode_textures);
         timings.textures_ms = Timings::since(t);
         for (guid, result) in &decoded {
             let path = || pkg.index.get(guid).and_then(|e| e.pathname.clone()).unwrap_or_else(|| guid.to_string());
@@ -241,6 +258,10 @@ impl Scene {
                 Ok(t) if t.note.is_some() => report.degrade(Degrade::TextureApproximated { path: path(), reason: t.note.clone().unwrap_or_default() }),
                 Ok(_) => {}
             }
+        }
+        let mips = |g: Option<Guid>| g.and_then(|g| decoded.get(&g)).and_then(|r| r.as_ref().ok()).and_then(|t| t.mips.clone());
+        for (m, maps) in materials.iter_mut().zip(&material_maps) {
+            (m.normal, m.emission, m.matcap) = (mips(maps.normal), mips(maps.emission), mips(maps.matcap));
         }
         for (i, tex) in material_textures.iter().enumerate() {
             let Some(Ok(t)) = tex.and_then(|g| decoded.get(&g)) else { continue };

@@ -8,7 +8,7 @@ use crate::{
 use bytemuck::{Pod, Zeroable};
 use std::collections::BTreeMap;
 use unipeek_unity::{
-    material::{Cull, Look},
+    material::{Cull, Look, MatcapBlend},
     shader::RenderMode,
 };
 use wgpu::util::DeviceExt;
@@ -32,6 +32,12 @@ struct MaterialUniform {
     /// cutoff, mode (0 opaque, 1 cutout, 2 transparent), outline width, unused
     params: [f32; 4],
     outline: [f32; 4],
+    /// emission rgb, normal scale (0 without a normal map)
+    emission: [f32; 4],
+    /// MatCap tint rgb and weight
+    matcap: [f32; 4],
+    /// MatCap blend (0 none, 1 mix, 2 add, 3 multiply), unused x3
+    extra: [f32; 4],
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -93,19 +99,23 @@ impl Renderer {
             count: None,
         };
         let g_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT)] });
+        let texture_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
         let m_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                texture_entry(0),
+                texture_entry(3),
+                texture_entry(4),
+                texture_entry(5),
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -141,15 +151,28 @@ impl Renderer {
             ..Default::default()
         });
         let white = vec![image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 255, 255, 255]))];
+        let flat = vec![image::RgbaImage::from_pixel(4, 4, image::Rgba([128, 128, 255, 255]))];
+        let srgb = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let white_view = upload(device, queue, "white", &white, srgb);
+        let flat_view = upload(device, queue, "flat normal", &flat, wgpu::TextureFormat::Rgba8Unorm);
         let binds: Vec<wgpu::BindGroup> = scene
             .materials
             .iter()
             .map(|m| {
-                let mips = m.texture.as_deref().unwrap_or(&white);
-                let view = upload(device, queue, &m.name, mips);
+                let view = upload(device, queue, &m.name, m.texture.as_deref().unwrap_or(&white), srgb);
+                let normal = m.normal.as_deref().map(|n| upload(device, queue, "normal", n, wgpu::TextureFormat::Rgba8Unorm));
+                let emission = m.emission.as_deref().map(|e| upload(device, queue, "emission", e, srgb));
+                let matcap = m.matcap.as_deref().map(|c| upload(device, queue, "matcap", c, srgb));
+                let mut look = m.look;
+                if m.normal.is_none() {
+                    look.normal_scale = 0.0;
+                }
+                if m.matcap.is_none() {
+                    look.matcap = None;
+                }
                 let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("material"),
-                    contents: bytemuck::bytes_of(&material_uniform(&m.look)),
+                    contents: bytemuck::bytes_of(&material_uniform(&look)),
                     usage: wgpu::BufferUsages::UNIFORM,
                 });
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -159,6 +182,9 @@ impl Renderer {
                         wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
                         wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
                         wgpu::BindGroupEntry { binding: 2, resource: uniform.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(normal.as_ref().unwrap_or(&flat_view)) },
+                        wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(emission.as_ref().unwrap_or(&white_view)) },
+                        wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(matcap.as_ref().unwrap_or(&white_view)) },
                     ],
                 })
             })
@@ -196,7 +222,7 @@ impl Renderer {
                     buffers: &[Some(wgpu::VertexBufferLayout {
                         array_stride: size_of::<Vertex>() as u64,
                         step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2, 3 => Float32x4],
                     })],
                 },
                 primitive: wgpu::PrimitiveState { cull_mode: d.cull, ..Default::default() },
@@ -320,17 +346,34 @@ fn material_uniform(look: &Look) -> MaterialUniform {
     };
     let (width, outline) = look.outline.map_or((0.0, [0.0; 4]), |o| (o.width, o.color));
     let [r, g, b] = look.shadow_color;
-    MaterialUniform { color: look.color, shadow: [r, g, b, 1.0], params: [look.cutoff, mode, width, 0.0], outline }
+    let [er, eg, eb] = look.emission;
+    let (matcap, blend) = match look.matcap {
+        None => ([0.0; 4], 0.0),
+        Some(m) => (m.color, match m.blend {
+            MatcapBlend::Mix => 1.0,
+            MatcapBlend::Add => 2.0,
+            MatcapBlend::Multiply => 3.0,
+        }),
+    };
+    MaterialUniform {
+        color: look.color,
+        shadow: [r, g, b, 1.0],
+        params: [look.cutoff, mode, width, 0.0],
+        outline,
+        emission: [er, eg, eb, look.normal_scale],
+        matcap,
+        extra: [blend, 0.0, 0.0, 0.0],
+    }
 }
 
-fn upload(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, mips: &[image::RgbaImage]) -> wgpu::TextureView {
+fn upload(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, mips: &[image::RgbaImage], format: wgpu::TextureFormat) -> wgpu::TextureView {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d { width: mips[0].width(), height: mips[0].height(), depth_or_array_layers: 1 },
         mip_level_count: mips.len() as u32,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });

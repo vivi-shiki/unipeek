@@ -6,8 +6,8 @@ the minor version may break the API; `0.1.x` releases only fix bugs and add thin
 
 ## Unreleased
 
-`RENDERER_VERSION` is 2: PSD textures that used to be drawn white are now drawn, and prefab material
-overrides on FBX instances are applied.
+`RENDERER_VERSION` is 2: PSD textures that used to be drawn white are now drawn, prefab material
+overrides on FBX instances are applied, and normal maps, MatCaps and emission are drawn.
 
 ### unipeek-unity
 
@@ -28,6 +28,10 @@ overrides on FBX instances are applied.
 - A material slot that uses a material from another package is reported as `missing_dependency`
   (usage `material`).
 - Prefab renderers match FBX nodes by the mesh's file ID first, so renamed game objects still bind.
+- `Look` has `normal_scale`, `emission` and `matcap`; `Material::maps` and `Binding::maps` name the
+  normal, emission and MatCap textures. Poiyomi (`_Mode`, emission, MatCap), MToon (`_BlendMode`,
+  shade color, outline, `_SphereAdd`) and Standard (`_Mode`, `_EMISSION`) are approximated, and
+  `Material::keywords` is read.
 - VRChat SDK mobile shaders (Toon Lit, MatCap Lit, ...) are recognized (`ShaderFamily::VrchatMobile`).
 
 ### unipeek
@@ -52,6 +56,8 @@ overrides on FBX instances are applied.
 - `render_turntable` and `unipeek turn <input> -o dir/ [--frames 24]`: turntable frames named
   `frame_000.webp` and on. `render_views`: several views at one size with one GPU setup, for small
   multi-view images (224², 384²).
+- Normal maps with MikkTSpace tangents (the `mikktspace` crate, MIT OR Apache-2.0), MatCap (mix, add,
+  multiply) and emission in the renderer. `SceneMaterial` has `normal`, `emission` and `matcap`.
 - `serve::Worker`: the host side of `serve`. Runs the child process, restarts it after it dies or
   times out, and returns an error only for the request that was in flight.
 - Fully transparent thumbnail pixels are always black (they used to keep a little blended color

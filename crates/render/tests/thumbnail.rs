@@ -239,3 +239,63 @@ fn turntable_and_view_sets_share_one_setup() {
     let single = thumb::render_thumbnail(&gpu, &scene, &ThumbOptions { size: 224, view: View::Side, background: Background::Transparent }).unwrap();
     assert_eq!(views[1], single, "a view set renders the same pixels as single thumbnails");
 }
+
+/// One quad with a lilToon material whose properties are patched in, rendered from the front.
+fn quad_with(extra_floats: &str, extra_colors: &str, extra_textures: &[(&str, &str, Vec<u8>)], main: [u8; 4]) -> Option<image::RgbaImage> {
+    let gpu = gpu("material_maps")?;
+    let mut mat = material_yaml("Red", LILTOON, 4800000, Some(RED_TEX), -1).replace("_Color: {r: 1, g: 0.5, b: 0.25, a: 1}", "_Color: {r: 1, g: 1, b: 1, a: 1}");
+    let tex: String = extra_textures.iter().map(|(n, g, _)| format!("    - {n}:\n        m_Texture: {{fileID: 2800000, guid: {g}, type: 3}}\n        m_Scale: {{x: 1, y: 1}}\n        m_Offset: {{x: 0, y: 0}}\n")).collect();
+    mat = mat.replace("    m_Ints: []\n", &format!("{tex}    m_Ints: []\n")).replace("    - _Cull: 2\n", &format!("    - _Cull: 2\n{extra_floats}")).replace("    m_Colors:\n", &format!("    m_Colors:\n{extra_colors}"));
+    let mut b = PackageBuilder::new()
+        .asset_with_meta(MODEL, "Assets/S/Quad.fbx", fbx_ascii(&["Red"]), model_meta(MODEL, &[("Red", RED_MAT)]))
+        .asset(RED_MAT, "Assets/S/Red.mat", mat)
+        .asset(RED_TEX, "Assets/S/Red.png", png(8, 8, main))
+        .asset(PREFAB, "Assets/S/Quad.prefab", prefab_instancing(MODEL, &[]));
+    for (n, g, bytes) in extra_textures {
+        b = b.asset(g, &format!("Assets/S/{n}.png"), bytes.clone());
+    }
+    let scene = Scene::load(input(b.build()), &LoadOptions::default()).unwrap();
+    Some(thumb::render_thumbnail(&gpu, &scene, &opts(View::Front)).unwrap())
+}
+
+fn mean(img: &image::RgbaImage) -> [f64; 3] {
+    let covered: Vec<_> = img.pixels().filter(|p| p.0[3] == 255).collect();
+    let n = covered.len().max(1) as f64;
+    [0, 1, 2].map(|c| covered.iter().map(|p| p.0[c] as f64).sum::<f64>() / n)
+}
+
+const GLOW_TEX: &str = "a1000000000000000000000000000001";
+const NORMAL_TEX: &str = "a1000000000000000000000000000002";
+const CAP_TEX: &str = "a1000000000000000000000000000003";
+
+#[test]
+fn emission_adds_light_after_shading() {
+    let Some(dark) = quad_with("", "", &[], [0, 0, 0, 255]) else { return };
+    let Some(glow) = quad_with("    - _UseEmission: 1\n", "    - _EmissionColor: {r: 0, g: 1, b: 0, a: 1}\n", &[("_EmissionMap", GLOW_TEX, png(4, 4, [255, 255, 255, 255]))], [0, 0, 0, 255]) else { return };
+    let (d, g) = (mean(&dark), mean(&glow));
+    assert!(d[1] < 40.0 && g[1] > 200.0 && g[0] < 40.0, "black texture plus green emission is green: {d:?} {g:?}");
+}
+
+#[test]
+fn a_flat_normal_map_changes_nothing_and_a_tilted_one_does() {
+    let Some(plain) = quad_with("", "", &[], [200, 200, 200, 255]) else { return };
+    let flat = png(4, 4, [128, 128, 255, 255]);
+    let Some(mapped) = quad_with("    - _UseBumpMap: 1\n", "", &[("_BumpMap", NORMAL_TEX, flat)], [200, 200, 200, 255]) else { return };
+    let (a, b) = (mean(&plain), mean(&mapped));
+    assert!((0..3).all(|c| (a[c] - b[c]).abs() < 2.0), "{a:?} {b:?}");
+    let tilted = png(4, 4, [255, 128, 128, 255]);
+    let Some(sideways) = quad_with("    - _UseBumpMap: 1\n", "", &[("_BumpMap", NORMAL_TEX, tilted)], [200, 200, 200, 255]) else { return };
+    let s = mean(&sideways);
+    assert!((0..3).any(|c| (s[c] - a[c]).abs() > 5.0), "a normal map pointing sideways puts the quad in shadow: {a:?} {s:?}");
+}
+
+#[test]
+fn matcap_blends_by_mode() {
+    let Some(plain) = quad_with("", "", &[], [100, 100, 100, 255]) else { return };
+    let cap = || png(4, 4, [0, 0, 255, 255]);
+    let Some(added) = quad_with("    - _UseMatCap: 1\n    - _MatCapBlendMode: 1\n", "    - _MatCapColor: {r: 1, g: 1, b: 1, a: 1}\n", &[("_MatCapTex", CAP_TEX, cap())], [100, 100, 100, 255]) else { return };
+    let Some(multiplied) = quad_with("    - _UseMatCap: 1\n    - _MatCapBlendMode: 3\n", "    - _MatCapColor: {r: 1, g: 1, b: 1, a: 1}\n", &[("_MatCapTex", CAP_TEX, cap())], [100, 100, 100, 255]) else { return };
+    let (p, a, m) = (mean(&plain), mean(&added), mean(&multiplied));
+    assert!(a[2] > p[2] + 50.0 && (a[0] - p[0]).abs() < 3.0, "add brightens blue only: {p:?} {a:?}");
+    assert!(m[0] < 5.0 && m[2] > 40.0, "multiply by blue keeps only blue: {m:?}");
+}

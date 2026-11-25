@@ -21,6 +21,8 @@ pub struct Material {
     pub textures: Vec<TexEnv>,
     pub floats: Vec<(String, f32)>,
     pub colors: Vec<(String, [f32; 4])>,
+    /// Shader keywords (`m_ShaderKeywords` or `m_ValidKeywords`), e.g. `_EMISSION`.
+    pub keywords: Vec<String>,
 }
 
 /// Property names of the main texture, in the order shaders commonly use them.
@@ -58,6 +60,11 @@ impl Material {
             textures,
             floats,
             colors,
+            keywords: {
+                let mut k: Vec<String> = body.get("m_ShaderKeywords").and_then(Node::as_str).unwrap_or_default().split_whitespace().map(str::to_string).collect();
+                k.extend(body.get("m_ValidKeywords").map(Node::items).unwrap_or_default().iter().filter_map(Node::as_str).map(str::to_string));
+                k
+            },
         })
     }
 
@@ -81,6 +88,41 @@ impl Material {
     fn first_color(&self, names: &[&str]) -> Option<[f32; 4]> {
         names.iter().find_map(|n| self.color(n))
     }
+
+    /// The texture of the first of `names` that points at one.
+    fn map(&self, names: &[&str]) -> Option<crate::Guid> {
+        names.iter().find_map(|n| self.textures.iter().find(|t| t.name == *n && !t.texture.is_null())).and_then(|t| t.texture.guid)
+    }
+
+    fn on(&self, name: &str) -> bool {
+        self.float(name).is_some_and(|v| v >= 0.5)
+    }
+
+    /// The extra textures the approximate look uses besides the main texture.
+    pub fn maps(&self, shader: &ShaderInfo) -> Maps {
+        use ShaderFamily::*;
+        let lil = matches!(shader.family, LilToon | LilToonLite | LilToonMulti);
+        let normal = match shader.family {
+            LilToon | LilToonMulti if !self.on("_UseBumpMap") => None,
+            LilToonLite | VrchatMobile | UnityBuiltin => None,
+            _ => self.map(&["_BumpMap", "_NormalMap"]),
+        };
+        let emission = match shader.family {
+            _ if lil && !self.on("_UseEmission") => None,
+            Poiyomi if !self.on("_EnableEmission") => None,
+            Standard if !self.keywords.iter().any(|k| k == "_EMISSION") => None,
+            Unknown | UnityBuiltin | VrchatMobile => None,
+            _ => self.map(&["_EmissionMap"]),
+        };
+        let matcap = match shader.family {
+            LilToon | LilToonMulti if self.on("_UseMatCap") => self.map(&["_MatCapTex"]),
+            Poiyomi if self.on("_MatcapEnable") => self.map(&["_Matcap"]),
+            MToon => self.map(&["_SphereAdd"]),
+            VrchatMobile if shader.name.as_deref().is_some_and(|n| n.contains("MatCap")) => self.map(&["_MatCap"]),
+            _ => None,
+        };
+        Maps { normal, emission, matcap }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -89,6 +131,31 @@ pub enum Cull {
     Off,
     Front,
     Back,
+}
+
+/// Textures besides the main texture, by GUID.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Maps {
+    pub normal: Option<crate::Guid>,
+    pub emission: Option<crate::Guid>,
+    pub matcap: Option<crate::Guid>,
+}
+
+/// How a MatCap texture is combined with the lit color.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatcapBlend {
+    /// Replace the color by the MatCap, weighted.
+    Mix,
+    Add,
+    Multiply,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct Matcap {
+    /// Tint; alpha is the weight.
+    pub color: [f32; 4],
+    pub blend: MatcapBlend,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
@@ -109,6 +176,12 @@ pub struct Look {
     pub outline: Option<Outline>,
     /// Draw the surface. False for outline-only and fake-shadow passes.
     pub draw_surface: bool,
+    /// Strength of the normal map, when the material has one.
+    pub normal_scale: f32,
+    /// Emitted color, added after lighting (multiplied by the emission map, if any). Black is none.
+    pub emission: [f32; 3],
+    /// MatCap, when the material has one (the texture is in `Maps::matcap`).
+    pub matcap: Option<Matcap>,
 }
 
 impl Look {
@@ -121,12 +194,27 @@ impl Look {
             cutoff: 0.5,
             outline: None,
             draw_surface: true,
+            normal_scale: 1.0,
+            emission: [0.0; 3],
+            matcap: None,
         }
     }
 
     pub fn of(material: &Material, shader: &ShaderInfo) -> Look {
         let mut look = Look::white();
-        look.mode = shader.mode.unwrap_or(match material.render_queue {
+        use ShaderFamily::*;
+        let by_property = match shader.family {
+            // Standard and Poiyomi: 0 opaque, 1 cutout, more is a kind of transparency.
+            Standard | Poiyomi => material.float("_Mode"),
+            MToon => material.float("_BlendMode"),
+            _ => None,
+        }
+        .map(|m| match m.round() as i32 {
+            0 => RenderMode::Opaque,
+            1 => RenderMode::Cutout,
+            _ => RenderMode::Transparent,
+        });
+        look.mode = shader.mode.or(by_property).unwrap_or(match material.render_queue {
             q if q >= 3000 => RenderMode::Transparent,
             q if q >= 2450 => RenderMode::Cutout,
             _ => RenderMode::Opaque,
@@ -137,7 +225,12 @@ impl Look {
         if let Some([r, g, b, _]) = material.color("_ShadowColor") {
             look.shadow_color = [r, g, b];
         }
-        look.cull = match material.float("_Cull").map(|c| c.round() as i32) {
+        if shader.family == MToon
+            && let Some([r, g, b, _]) = material.color("_ShadeColor")
+        {
+            look.shadow_color = [r, g, b];
+        }
+        look.cull = match material.float("_Cull").or_else(|| material.float("_CullMode")).map(|c| c.round() as i32) {
             Some(0) => Cull::Off,
             Some(1) => Cull::Front,
             _ => Cull::Back,
@@ -153,7 +246,56 @@ impl Look {
                 look.outline = Some(Outline { width, color });
             }
         }
+        if shader.family == MToon && material.on("_OutlineWidthMode") {
+            // The world-space outline width of MToon is in centimeters too.
+            let width = material.float("_OutlineWidth").unwrap_or(0.5) * 0.01;
+            if width > 0.0 {
+                look.outline = Some(Outline { width, color: material.color("_OutlineColor").unwrap_or([0.0, 0.0, 0.0, 1.0]) });
+            }
+        }
         look.draw_surface = !matches!(shader.variant, Variant::OutlineOnly | Variant::FakeShadow | Variant::Internal);
+
+        let maps = material.maps(shader);
+        if maps.normal.is_some() {
+            look.normal_scale = material.float("_BumpScale").unwrap_or(1.0);
+        }
+        let emission_on = match shader.family {
+            LilToon | LilToonLite | LilToonMulti => material.on("_UseEmission"),
+            Poiyomi => material.on("_EnableEmission"),
+            Standard => material.keywords.iter().any(|k| k == "_EMISSION"),
+            MToon => true,
+            _ => false,
+        };
+        if emission_on && let Some([r, g, b, _]) = material.color("_EmissionColor") {
+            let strength = if shader.family == Poiyomi { material.float("_EmissionStrength").unwrap_or(1.0) } else { 1.0 };
+            look.emission = [r * strength, g * strength, b * strength];
+        }
+        if maps.matcap.is_some() {
+            look.matcap = Some(match shader.family {
+                Poiyomi => {
+                    let [r, g, b, _] = material.color("_MatcapColor").unwrap_or([1.0; 4]);
+                    let weight = material.float("_MatcapIntensity").unwrap_or(1.0);
+                    let blend = if material.float("_MatcapAdd").unwrap_or(0.0) > 0.0 {
+                        MatcapBlend::Add
+                    } else if material.float("_MatcapMultiply").unwrap_or(0.0) > 0.0 {
+                        MatcapBlend::Multiply
+                    } else {
+                        MatcapBlend::Mix
+                    };
+                    Matcap { color: [r, g, b, weight.clamp(0.0, 1.0)], blend }
+                }
+                MToon | VrchatMobile => Matcap { color: [1.0; 4], blend: MatcapBlend::Add },
+                _ => {
+                    let [r, g, b, a] = material.color("_MatCapColor").unwrap_or([1.0; 4]);
+                    let blend = match material.float("_MatCapBlendMode").map(|m| m.round() as i32) {
+                        Some(1 | 2) => MatcapBlend::Add,
+                        Some(3) => MatcapBlend::Multiply,
+                        _ => MatcapBlend::Mix,
+                    };
+                    Matcap { color: [r, g, b, a * material.float("_MatCapBlend").unwrap_or(1.0)], blend }
+                }
+            });
+        }
         look
     }
 }
@@ -251,5 +393,79 @@ mod tests {
         assert_eq!(Look::of(&cut, &s).mode, RenderMode::Cutout);
         let opaque = Material::parse(&material_yaml("Skin", unknown, 4800000, None, -1)).unwrap();
         assert_eq!(Look::of(&opaque, &s).mode, RenderMode::Opaque);
+    }
+
+    const NORMAL: &str = "1111111111111111aaaaaaaaaaaaaaaa";
+    const GLOW: &str = "2222222222222222aaaaaaaaaaaaaaaa";
+    const CAP: &str = "3333333333333333aaaaaaaaaaaaaaaa";
+    const SHADER: &str = "4444444444444444aaaaaaaaaaaaaaaa";
+
+    /// A material with extra float, color and texture properties and keywords.
+    fn with(floats: &[(&str, f32)], colors: &[(&str, [f32; 4])], textures: &[(&str, &str)], keywords: &str) -> Material {
+        let mut yaml = material_yaml("M", SHADER, 4800000, Some(TEX), -1);
+        let tex: String = textures.iter().map(|(n, g)| format!("    - {n}:\n        m_Texture: {{fileID: 2800000, guid: {g}, type: 3}}\n        m_Scale: {{x: 1, y: 1}}\n        m_Offset: {{x: 0, y: 0}}\n")).collect();
+        yaml = yaml.replace("    m_Ints: []\n", &format!("{tex}    m_Ints: []\n"));
+        let fl: String = floats.iter().map(|(n, v)| format!("    - {n}: {v}\n")).collect();
+        yaml = yaml.replace("    - _Cull: 2\n", &format!("    - _Cull: 2\n{fl}"));
+        let co: String = colors.iter().map(|(n, [r, g, b, a])| format!("    - {n}: {{r: {r}, g: {g}, b: {b}, a: {a}}}\n")).collect();
+        yaml = yaml.replace("    m_Colors:\n", &format!("    m_Colors:\n{co}"));
+        yaml = yaml.replace("  m_CustomRenderQueue:", &format!("  m_ShaderKeywords: {keywords}\n  m_CustomRenderQueue:"));
+        Material::parse(&yaml).unwrap()
+    }
+
+    fn named(name: &str) -> ShaderInfo {
+        shader::identify(ObjRef { file_id: 4800000, guid: Guid::parse(SHADER), kind: Some(3) }, Some(name))
+    }
+
+    #[test]
+    fn liltoon_maps_only_when_their_switch_is_on() {
+        let textures = [("_BumpMap", NORMAL), ("_EmissionMap", GLOW), ("_MatCapTex", CAP)];
+        let off = with(&[], &[("_EmissionColor", [1.0, 0.5, 0.0, 1.0])], &textures, "");
+        let lil = info("df12117ecd77c31469c224178886498e", 4800000);
+        assert_eq!(off.maps(&lil), Maps::default());
+        assert_eq!(Look::of(&off, &lil).emission, [0.0; 3]);
+        let on = with(&[("_UseBumpMap", 1.0), ("_BumpScale", 0.5), ("_UseEmission", 1.0), ("_UseMatCap", 1.0), ("_MatCapBlendMode", 1.0), ("_MatCapBlend", 0.5)], &[("_EmissionColor", [1.0, 0.5, 0.0, 1.0]), ("_MatCapColor", [1.0, 1.0, 1.0, 1.0])], &textures, "");
+        let maps = on.maps(&lil);
+        assert_eq!((maps.normal, maps.emission, maps.matcap), (Guid::parse(NORMAL), Guid::parse(GLOW), Guid::parse(CAP)));
+        let look = Look::of(&on, &lil);
+        assert_eq!((look.normal_scale, look.emission), (0.5, [1.0, 0.5, 0.0]));
+        assert_eq!(look.matcap, Some(Matcap { color: [1.0, 1.0, 1.0, 0.5], blend: MatcapBlend::Add }));
+    }
+
+    #[test]
+    fn poiyomi_mode_emission_and_matcap() {
+        let poi = named(".poiyomi/Poiyomi 8.1/Poiyomi Toon");
+        let m = with(&[("_Mode", 1.0), ("_EnableEmission", 1.0), ("_EmissionStrength", 2.0), ("_MatcapEnable", 1.0), ("_MatcapIntensity", 0.7), ("_MatcapMultiply", 1.0)], &[("_EmissionColor", [0.5, 0.25, 0.0, 1.0])], &[("_Matcap", CAP), ("_BumpMap", NORMAL)], "");
+        let look = Look::of(&m, &poi);
+        assert_eq!(look.mode, RenderMode::Cutout);
+        assert_eq!(look.emission, [1.0, 0.5, 0.0], "strength multiplies the color");
+        assert_eq!(look.matcap.unwrap().blend, MatcapBlend::Multiply);
+        assert_eq!(m.maps(&poi).normal, Guid::parse(NORMAL), "Poiyomi uses its normal map without a switch");
+    }
+
+    #[test]
+    fn mtoon_shade_color_outline_and_sphere() {
+        let mtoon = named("VRM/MToon");
+        let m = with(&[("_BlendMode", 2.0), ("_CullMode", 0.0), ("_OutlineWidthMode", 1.0), ("_OutlineWidth", 0.2)], &[("_ShadeColor", [0.6, 0.5, 0.7, 1.0]), ("_OutlineColor", [0.1, 0.0, 0.0, 1.0])], &[("_SphereAdd", CAP)], "");
+        let look = Look::of(&m, &mtoon);
+        assert_eq!(look.mode, RenderMode::Transparent);
+        assert_eq!(look.shadow_color, [0.6, 0.5, 0.7]);
+        assert_eq!(look.cull, Cull::Back, "_Cull wins over _CullMode when both are there");
+        let outline = look.outline.unwrap();
+        assert!((outline.width - 0.002).abs() < 1e-6);
+        assert_eq!(look.matcap.unwrap().blend, MatcapBlend::Add);
+    }
+
+    #[test]
+    fn standard_emission_needs_the_keyword() {
+        let standard = shader::identify(ObjRef { file_id: 46, guid: Guid::parse(shader::BUILTIN_GUID), kind: Some(0) }, None);
+        let colors = [("_EmissionColor", [0.0, 1.0, 0.0, 1.0])];
+        let plain = with(&[("_Mode", 3.0)], &colors, &[("_EmissionMap", GLOW)], "");
+        assert_eq!(Look::of(&plain, &standard).emission, [0.0; 3]);
+        assert_eq!(Look::of(&plain, &standard).mode, RenderMode::Transparent);
+        let glowing = with(&[], &colors, &[("_EmissionMap", GLOW)], "_EMISSION _NORMALMAP");
+        assert_eq!(glowing.keywords, vec!["_EMISSION", "_NORMALMAP"]);
+        assert_eq!(Look::of(&glowing, &standard).emission, [0.0, 1.0, 0.0]);
+        assert_eq!(glowing.maps(&standard).emission, Guid::parse(GLOW));
     }
 }

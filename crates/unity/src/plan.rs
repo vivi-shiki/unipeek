@@ -109,6 +109,8 @@ pub struct Binding {
     pub shader: Option<ShaderInfo>,
     pub look: Look,
     pub main_texture: Option<TextureRef>,
+    /// Normal, emission and MatCap textures the look uses, when they are in the package.
+    pub maps: crate::material::Maps,
     /// Why the bound `.mat` could not be read (binary serialization, too large), if so.
     pub unreadable: Option<String>,
 }
@@ -191,7 +193,7 @@ impl Plan {
         {
             return match mat {
                 Some(mat) => bind_material(index, *mat, BindSource::PrefabOverride),
-                None => Binding { source: BindSource::Unbound, material: None, material_name: None, material_path: None, shader: None, look: Look::white(), main_texture: None, unreadable: None },
+                None => Binding { source: BindSource::Unbound, material: None, material_name: None, material_path: None, shader: None, look: Look::white(), main_texture: None, maps: Default::default(), unreadable: None },
             };
         }
         self.bind_slot(index, model, object, slot_index, slot)
@@ -234,7 +236,7 @@ impl Plan {
             return bind_material(index, mat, BindSource::ExternalObject);
         }
         if slot.trim().is_empty() {
-            return Binding { source: BindSource::Unbound, material: None, material_name: None, material_path: None, shader: None, look: Look::white(), main_texture: None, unreadable: None };
+            return Binding { source: BindSource::Unbound, material: None, material_name: None, material_path: None, shader: None, look: Look::white(), main_texture: None, maps: Default::default(), unreadable: None };
         }
         let named = |e: &Entry| -> bool {
             let name = e.text.as_deref().and_then(Material::parse).map(|m| m.name);
@@ -255,7 +257,7 @@ impl Plan {
             .filter(|e| e.stem().is_some_and(|s| s.to_lowercase().ends_with(&slot_lower)))
             .filter(|e| !is_normal_map(e))
             .max_by_key(closest);
-        let mut binding = Binding { source: BindSource::Unbound, material: None, material_name: None, material_path: None, shader: None, look: Look::white(), main_texture: None, unreadable: None };
+        let mut binding = Binding { source: BindSource::Unbound, material: None, material_name: None, material_path: None, shader: None, look: Look::white(), main_texture: None, maps: Default::default(), unreadable: None };
         if let Some(t) = texture {
             binding.source = BindSource::TextureName;
             binding.main_texture = Some(TextureRef { guid: t.guid, path: t.pathname.clone(), in_package: true });
@@ -301,6 +303,7 @@ fn bind_material(index: &PackageIndex, mat: Guid, source: BindSource) -> Binding
         shader: None,
         look: Look::white(),
         main_texture: None,
+        maps: Default::default(),
         unreadable: None,
     };
     let Some(entry) = entry.filter(|e| e.size.is_some()) else { return b };
@@ -321,6 +324,11 @@ fn bind_material(index: &PackageIndex, mat: Guid, source: BindSource) -> Binding
         let e = index.get(&guid).filter(|e| e.size.is_some());
         TextureRef { guid, path: e.and_then(|e| e.pathname.clone()), in_package: e.is_some() }
     });
+    let in_package = |g: Option<Guid>| g.filter(|g| index.get(g).is_some_and(|e| e.size.is_some()));
+    if let Some(shader) = &b.shader {
+        let maps = m.maps(shader);
+        b.maps = crate::material::Maps { normal: in_package(maps.normal), emission: in_package(maps.emission), matcap: in_package(maps.matcap) };
+    }
     b.material_name = Some(m.name);
     b
 }

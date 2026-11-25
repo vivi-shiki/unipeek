@@ -27,6 +27,7 @@ tar = { version = "0.4.46", default-features = false }
 flate2 = "1.1.11"
 zip = { version = "9.8", default-features = false, features = ["deflate-flate2"] }
 encoding_rs = "0.8.44"
+mikktspace = { version = "0.3", default-features = false, features = ["glam"] }
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 
 [profile.dev]
