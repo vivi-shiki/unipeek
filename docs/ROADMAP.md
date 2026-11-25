@@ -217,7 +217,7 @@
 
 ### 完成标准
 
-- [x] 本机样本里的衣装包加上对应素体包（`--with`）后，出图包含素体；不给时降级并列出缺的 GUID。2026-11-26：合成的衣装包和素体包上验证（`tests/resolver.rs`：不给时列出缺的 prefab 和材质，给了以后两边的网格和素体的贴图都在，每个包只开一次）。本机样本里没有通过 GUID 引用素体的衣装包：Kipfel 用的配件包 prefab 不引用 Kipfel 的任何 GUID，所以 `--with` Kipfel 加不进东西（报告 `dependencies` 为空，这是对的）；prizonyarpunk 衣装引用了配件包里的材质「metal B」，加上 `--with` 配件包后从那里读到（`local_samples::resolver_with_local_packages`）。配件包原来报的 `missing_material` 是因为 prefab 里渲染器的物体名和 FBX 节点名不一样，现在按网格的 fileID 对上了。
+- [x] 本机样本里的衣装包加上对应素体包（`--with`）后，出图包含素体；不给时降级并列出缺的 GUID。2026-11-26：合成的衣装包和素体包上验证（`tests/resolver.rs`：不给时列出缺的 prefab 和材质，给了以后两边的网格和素体的贴图都在，每个包只开一次）。本机样本里没有通过 GUID 引用素体的衣装包：一个头像的配件包 prefab 不引用那个头像包的任何 GUID，所以 `--with` 头像包加不进东西（报告 `dependencies` 为空，这是对的）；另一个衣装包引用了配件包里的一个材质，加上 `--with` 配件包后从那里读到（`local_samples::resolver_with_local_packages`）。配件包原来报的 `missing_material` 是因为 prefab 里渲染器的物体名和 FBX 节点名不一样，现在按网格的 fileID 对上了。
 
 ## M6 以后
 
