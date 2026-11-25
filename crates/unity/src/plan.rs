@@ -32,6 +32,8 @@ pub struct RendererMaterials {
     pub model: Guid,
     /// Name of the renderer's game object, which Unity names after the FBX node.
     pub object: String,
+    /// Local file ID of the mesh in the model (`fileid::mesh` of the FBX node's name).
+    pub mesh: i64,
     pub materials: Vec<Option<Guid>>,
 }
 
@@ -212,7 +214,13 @@ impl Plan {
     /// the mesh on the FBX node `object`.
     pub fn bind_slot(&self, index: &PackageIndex, model: Guid, object: &str, slot_index: usize, slot: &str) -> Binding {
         let mine: Vec<&RendererMaterials> = self.renderer_materials.iter().filter(|r| r.model == model).collect();
-        let renderer = mine.iter().find(|r| r.object.eq_ignore_ascii_case(object)).or(if mine.len() == 1 { mine.first() } else { None });
+        // The mesh's file ID names the FBX node exactly; the game object may have been renamed.
+        let mesh = crate::fileid::mesh(object);
+        let renderer = mine
+            .iter()
+            .find(|r| r.mesh == mesh)
+            .or_else(|| mine.iter().find(|r| r.object.eq_ignore_ascii_case(object)))
+            .or(if mine.len() == 1 { mine.first() } else { None });
         if let Some(Some(mat)) = renderer.and_then(|r| r.materials.get(slot_index)) {
             return bind_material(index, *mat, BindSource::PrefabRenderer);
         }
@@ -400,7 +408,8 @@ impl Walker<'_> {
         for r in &prefab.renderers {
             let Some(model) = r.mesh.and_then(|m| m.guid).filter(|g| index.get(g).is_some_and(is_model)) else { continue };
             let object = prefab.objects.iter().find(|o| o.file_id == r.game_object).map(|o| o.name.clone()).unwrap_or_default();
-            walk.renderers.push(RendererMaterials { model, object, materials: r.materials.iter().map(|m| m.guid.filter(|g| !g.is_zero())).collect() });
+            let mesh = r.mesh.map_or(0, |m| m.file_id);
+            walk.renderers.push(RendererMaterials { model, object, mesh, materials: r.materials.iter().map(|m| m.guid.filter(|g| !g.is_zero())).collect() });
         }
         let sources = prefab.instances.iter().filter_map(|i| i.source.guid);
         let meshes = prefab.renderers.iter().filter_map(|r| r.mesh).chain(prefab.mesh_filters.iter().map(|(_, m)| *m)).filter_map(|m| m.guid);

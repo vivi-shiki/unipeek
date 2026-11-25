@@ -329,3 +329,18 @@ fn overrides_of_things_that_are_not_models_are_counted() {
     let plan = Plan::new(&idx, Some("Assets/Shop/Avatar/Prefab/Wrapper.prefab")).unwrap();
     assert_eq!(plan.material_overrides, 1);
 }
+
+#[test]
+fn renderers_match_fbx_nodes_by_mesh_file_id_when_renamed() {
+    let mesh_id = crate::fileid::mesh("Hair");
+    let prefab = prefab_with_renderer("Renamed hair", MODEL, &[HAIR_MAT]).replace("m_Mesh: {fileID: 4300000,", &format!("m_Mesh: {{fileID: {mesh_id},"));
+    let two = prefab.clone() + &prefab_with_renderer("Body", MODEL, &[BODY_MAT]).replace("%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n", "").replace("&10\n", "&20\n").replace("&11\n", "&21\n").replace("&12\n", "&22\n").replace("{fileID: 10}", "{fileID: 20}");
+    let idx = index(
+        avatar()
+            .asset(HAIR_MAT, "Assets/Shop/Avatar/Material/Hair.mat", material_yaml("Hair", LIL_O, 4800000, Some(HAIR_TEX), 2000))
+            .asset("dddddddddddddddddddddddddddddddd", "Assets/Shop/Avatar/Prefab/Unpacked.prefab", two),
+    );
+    let plan = Plan::new(&idx, Some("Assets/Shop/Avatar/Prefab/Unpacked.prefab")).unwrap();
+    let b = plan.bind_slot(&idx, g(MODEL), "Hair", 0, "metal.001");
+    assert_eq!((b.source, b.material), (BindSource::PrefabRenderer, Some(g(HAIR_MAT))), "found by the mesh's file ID, not the object name");
+}
