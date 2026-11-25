@@ -7,7 +7,7 @@ use unipeek::{
     unity::{
         Degrade, Status,
         shader::RenderMode,
-        testing::{PackageBuilder, fbx_ascii, material_yaml, model_meta, prefab_instancing},
+        testing::{PackageBuilder, PsdBuilder, PsdCompression, fbx_ascii, material_yaml, model_meta, prefab_instancing},
     },
 };
 
@@ -87,4 +87,46 @@ fn single_fbx_bytes_without_materials() {
 fn non_assets_are_errors() {
     let err = Scene::load(input(b"hello".to_vec()), &LoadOptions::default()).err().unwrap();
     assert!(err.to_string().contains("not a unitypackage"), "{err}");
+}
+
+fn package_with_psds(blue: Vec<u8>) -> Vec<u8> {
+    let red = PsdBuilder::rgba8(2, 2, &[[255, 0, 0, 255]; 4], false).compression(PsdCompression::Rle).build();
+    PackageBuilder::new()
+        .asset_with_meta(MODEL, "Assets/Shop/Quads.fbx", fbx_ascii(&["Red", "Blue"]), model_meta(MODEL, &[("Red", RED_MAT), ("Blue", BLUE_MAT)]))
+        .asset(RED_MAT, "Assets/Shop/Red.mat", material_yaml("Red", LILTOON, 4800000, Some(RED_TEX), -1))
+        .asset(BLUE_MAT, "Assets/Shop/Blue.mat", material_yaml("Blue", LILTOON, 4800000, Some(BLUE_TEX), -1))
+        .asset(RED_TEX, "Assets/Shop/Red.psd", red)
+        .asset(BLUE_TEX, "Assets/Shop/Blue.psd", blue)
+        .asset(PREFAB, "Assets/Shop/Quads.prefab", prefab_instancing(MODEL, &[]))
+        .build()
+}
+
+#[test]
+fn psd_textures_use_the_composite() {
+    let mut cmyk = PsdBuilder::rgba8(2, 2, &[[0, 0, 0, 0]; 4], false);
+    (cmyk.mode, cmyk.planes) = (4, vec![vec![255; 4], vec![255; 4], vec![0; 4], vec![255; 4]]);
+    let scene = Scene::load(input(package_with_psds(cmyk.build())), &LoadOptions::default()).unwrap();
+    let red = scene.materials[0].texture.as_ref().expect("PSD composite decoded");
+    assert_eq!(red[0].get_pixel(1, 1).0, [255, 0, 0, 255]);
+    let blue = scene.materials[1].texture.as_ref().expect("CMYK composite decoded");
+    assert_eq!(blue[0].get_pixel(0, 0).0, [255, 255, 0, 255], "full yellow ink");
+    assert_eq!(scene.report.materials[0].texture_size, Some([2, 2]));
+    let d = &scene.report.degrades;
+    assert!(d.iter().any(|x| matches!(x, Degrade::TextureApproximated { path, reason } if path == "Assets/Shop/Blue.psd" && reason.contains("CMYK"))), "{d:?}");
+    assert!(!d.iter().any(|x| matches!(x, Degrade::TextureApproximated { path, .. } if path == "Assets/Shop/Red.psd")), "{d:?}");
+}
+
+#[test]
+fn psd_without_composite_is_unreadable_and_reports_skip_decoding() {
+    let mut flat = PsdBuilder::rgba8(2, 2, &[[0, 0, 255, 255]; 4], false);
+    flat.real_merged = Some(false);
+    let scene = Scene::load(input(package_with_psds(flat.build())), &LoadOptions::default()).unwrap();
+    assert!(scene.materials[1].texture.is_none());
+    let d = &scene.report.degrades;
+    assert!(d.iter().any(|x| matches!(x, Degrade::TextureUnreadable { reason, .. } if reason.contains("Maximize Compatibility"))), "{d:?}");
+
+    let report_only = Scene::load(input(two_quads()), &LoadOptions { decode_textures: false, ..Default::default() }).unwrap();
+    assert!(report_only.materials.iter().all(|m| m.texture.is_none()), "nothing decoded for a report");
+    assert_eq!(report_only.report.materials[1].texture_size, Some([4096, 16]), "sizes come from the headers");
+    assert_eq!(report_only.report.status, Status::Ok);
 }

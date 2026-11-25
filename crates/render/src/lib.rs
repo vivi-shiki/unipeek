@@ -6,6 +6,7 @@ pub mod camera;
 pub mod error;
 pub mod gpu;
 pub mod model;
+pub mod psd;
 pub mod renderer;
 pub mod scene;
 pub mod serve;

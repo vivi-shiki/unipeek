@@ -22,11 +22,14 @@ pub struct LoadOptions {
     pub index: IndexOptions,
     /// Longest side of a decoded texture; larger textures are scaled down before upload.
     pub max_texture: u32,
+    /// Decode textures. Off for reports only: sizes come from the file headers and the scene's
+    /// materials have no textures.
+    pub decode_textures: bool,
 }
 
 impl Default for LoadOptions {
     fn default() -> Self {
-        LoadOptions { index: IndexOptions::default(), max_texture: 2048 }
+        LoadOptions { index: IndexOptions::default(), max_texture: 2048, decode_textures: true }
     }
 }
 
@@ -137,17 +140,20 @@ impl Scene {
         }
         let unique: BTreeSet<Guid> = material_textures.iter().flatten().copied().collect();
         let t = Instant::now();
-        let decoded = decode_all(&unique, &bytes, opts.max_texture);
+        let decoded = decode_all(&unique, &bytes, opts.max_texture, opts.decode_textures);
         timings.textures_ms = Timings::since(t);
         for (guid, result) in &decoded {
-            if let Err(reason) = result {
-                let path = pkg.index.get(guid).and_then(|e| e.pathname.clone()).unwrap_or_else(|| guid.to_string());
-                report.degrade(Degrade::TextureUnreadable { path, reason: reason.clone() });
+            let path = || pkg.index.get(guid).and_then(|e| e.pathname.clone()).unwrap_or_else(|| guid.to_string());
+            match result {
+                Err(reason) => report.degrade(Degrade::TextureUnreadable { path: path(), reason: reason.clone() }),
+                Ok(t) if t.note.is_some() => report.degrade(Degrade::TextureApproximated { path: path(), reason: t.note.clone().unwrap_or_default() }),
+                Ok(_) => {}
             }
         }
         for (i, tex) in material_textures.iter().enumerate() {
-            let Some(Ok((mips, size))) = tex.and_then(|g| decoded.get(&g)) else { continue };
-            materials[i].texture = Some(mips.clone());
+            let Some(Ok(t)) = tex.and_then(|g| decoded.get(&g)) else { continue };
+            let size = &t.size;
+            materials[i].texture = t.mips.clone();
             let (model, slot) = &material_slots[i];
             if let Some(r) = report.materials.iter_mut().find(|r| &r.model == model && &r.slot == slot) {
                 r.texture_size = Some(*size);
@@ -176,10 +182,17 @@ impl Scene {
     }
 }
 
-type Decoded = std::result::Result<(Arc<[image::RgbaImage]>, [u32; 2]), String>;
+struct Texture {
+    /// `None` when only the size was read.
+    mips: Option<Arc<[image::RgbaImage]>>,
+    size: [u32; 2],
+    note: Option<String>,
+}
+
+type Decoded = std::result::Result<Texture, String>;
 
 /// Decode every texture on its own thread; 4K PNGs take most of the load time.
-fn decode_all(guids: &BTreeSet<Guid>, bytes: &BTreeMap<Guid, Arc<[u8]>>, max: u32) -> BTreeMap<Guid, Decoded> {
+fn decode_all(guids: &BTreeSet<Guid>, bytes: &BTreeMap<Guid, Arc<[u8]>>, max: u32, decode: bool) -> BTreeMap<Guid, Decoded> {
     std::thread::scope(|s| {
         let handles: Vec<_> = guids
             .iter()
@@ -187,8 +200,11 @@ fn decode_all(guids: &BTreeSet<Guid>, bytes: &BTreeMap<Guid, Arc<[u8]>>, max: u3
                 let data = bytes.get(g).cloned();
                 (*g, s.spawn(move || -> Decoded {
                     let data = data.ok_or("the texture's bytes are not in the input")?;
-                    let (img, size) = texture::decode(&data, max)?;
-                    Ok((Arc::from(texture::mips(img)), size))
+                    if !decode {
+                        return Ok(Texture { mips: None, size: texture::dimensions(&data)?, note: None });
+                    }
+                    let d = texture::decode(&data, max)?;
+                    Ok(Texture { mips: Some(Arc::from(texture::mips(d.image))), size: d.size, note: d.note })
                 }))
             })
             .collect();

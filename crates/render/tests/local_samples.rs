@@ -317,3 +317,66 @@ trait TakeExact: std::io::Read + Sized {
 }
 
 impl<R: std::io::Read> TakeExact for R {}
+
+/// PSD composites: every `.psd` / `.psb` next to the samples (Unity's `Library/` excluded) decodes,
+/// unless the manifest lists it under `psd_unreadable` with the expected reason.
+#[test]
+fn psd_composites_decode() {
+    let _shared = shared();
+    let Some((root, manifest)) = samples("psd_composites_decode") else { return };
+    let unreadable: Vec<(&str, &str)> = manifest["psd_unreadable"]
+        .as_array()
+        .map(|a| a.iter().map(|v| (v["path"].as_str().unwrap(), v["reason"].as_str().unwrap())).collect())
+        .unwrap_or_default();
+    let mut found = Vec::new();
+    let mut stack = vec![(root.clone(), 0)];
+    while let Some((dir, depth)) = stack.pop() {
+        for e in std::fs::read_dir(&dir).unwrap().flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            if p.is_dir() {
+                if depth < 6 && name != "library" {
+                    stack.push((p, depth + 1));
+                }
+            } else if name.ends_with(".psd") || name.ends_with(".psb") {
+                found.push(p);
+            }
+        }
+    }
+    found.sort();
+    let mut failures = Vec::new();
+    for p in &found {
+        let rel = p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
+        let bytes = std::fs::read(p).unwrap();
+        let t = Instant::now();
+        let expected = unreadable.iter().find(|(path, _)| *path == rel).map(|(_, r)| *r);
+        match (unipeek::psd::decode(&bytes), expected) {
+            (Ok(c), None) => {
+                println!("local: {rel}: {}x{} {:?} in {:?}", c.image.width(), c.image.height(), c.note, t.elapsed());
+                // Shops often ship the same texture exported as PNG in a sibling `PNG/` folder.
+                let stem = p.file_stem().unwrap().to_string_lossy().into_owned();
+                let png = p.parent().and_then(Path::parent).map(|d| d.join("PNG").join(format!("{stem}.png")));
+                if let Some(png) = png.filter(|p| p.is_file()) {
+                    let png = image::open(&png).unwrap().to_rgba8();
+                    if png.dimensions() == c.image.dimensions() {
+                        let (mut sum, mut n) = (0u64, 0u64);
+                        for (a, b) in png.pixels().zip(c.image.pixels()).filter(|(a, _)| a.0[3] == 255) {
+                            sum += (0..3).map(|i| (a.0[i] as i64 - b.0[i] as i64).unsigned_abs()).sum::<u64>();
+                            n += 3;
+                        }
+                        let mean = sum as f64 / n.max(1) as f64;
+                        println!("local: {rel}: mean difference to the PNG export {mean:.2}");
+                        if mean > 8.0 {
+                            failures.push(format!("{rel}: composite differs from the PNG export by {mean:.2} on average"));
+                        }
+                    }
+                }
+            }
+            (Err(e), Some(reason)) if e.contains(reason) => println!("local: {rel}: unreadable as expected: {e}"),
+            (Ok(_), Some(reason)) => failures.push(format!("{rel}: decoded, but the manifest expects {reason:?}")),
+            (Err(e), _) => failures.push(format!("{rel}: {e}")),
+        }
+    }
+    println!("local: {} PSD file(s)", found.len());
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

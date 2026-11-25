@@ -56,7 +56,7 @@ fn run(args: &[String]) -> Result<i32, Failure> {
         "info" => {
             let (input, flags) = input_and_flags(rest)?;
             let json = flags.iter().any(|f| f == "--json");
-            let scene = Scene::load(Input::from_location(input), &LoadOptions::default())?;
+            let scene = Scene::load(Input::from_location(input), &LoadOptions { decode_textures: false, ..Default::default() })?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&scene.report).unwrap_or_default());
             } else {

@@ -53,7 +53,7 @@ fn handle(req: Request, gpu: &mut Option<Result<Gpu, String>>) -> Value {
         "version" => json!({"id": id, "status": "ok", "version": env!("CARGO_PKG_VERSION"), "renderer_version": RENDERER_VERSION}),
         "info" => {
             let Some(source) = req.source else { return error(id, "info needs a source".into()) };
-            match Scene::load(Input::from_location(&source), &LoadOptions::default()) {
+            match Scene::load(Input::from_location(&source), &LoadOptions { decode_textures: false, ..Default::default() }) {
                 Ok(scene) => {
                     let mut reply = summary(id, &scene.report);
                     reply["report"] = serde_json::to_value(&scene.report).unwrap_or(Value::Null);

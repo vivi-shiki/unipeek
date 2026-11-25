@@ -237,3 +237,157 @@ pub fn fbx_ascii_cube(material: &str) -> String {
 
 pub const FBX_BINARY_MAGIC: &[u8] = b"Kaydara FBX Binary  \x00\x1a\x00";
 pub const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+/// How `PsdBuilder` stores the image data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PsdCompression {
+    Raw,
+    Rle,
+    Zip,
+    ZipPredicted,
+}
+
+/// Builds a Photoshop file with a composite image, for PSD tests. Channel samples are given per
+/// channel (planar) as big-endian bytes of the chosen depth.
+#[derive(Clone, Debug)]
+pub struct PsdBuilder {
+    pub width: u32,
+    pub height: u32,
+    pub depth: u16,
+    /// 1 grayscale, 2 indexed, 3 RGB, 4 CMYK, ...
+    pub mode: u16,
+    pub planes: Vec<Vec<u8>>,
+    pub compression: PsdCompression,
+    /// Write a negative layer count, so the channel after the color channels is the transparency.
+    pub merged_alpha: bool,
+    /// `Some(false)` writes the version-info resource of a file saved without Maximize Compatibility.
+    pub real_merged: Option<bool>,
+    /// PSB (version 2) instead of PSD.
+    pub psb: bool,
+    pub palette: Vec<u8>,
+}
+
+impl PsdBuilder {
+    /// An 8-bit RGB(A) image from RGBA pixels; alpha becomes a merged transparency channel when `alpha`.
+    pub fn rgba8(width: u32, height: u32, pixels: &[[u8; 4]], alpha: bool) -> PsdBuilder {
+        let channels = if alpha { 4 } else { 3 };
+        let planes = (0..channels).map(|c| pixels.iter().map(|p| p[c]).collect()).collect();
+        PsdBuilder {
+            width,
+            height,
+            depth: 8,
+            mode: 3,
+            planes,
+            compression: PsdCompression::Raw,
+            merged_alpha: alpha,
+            real_merged: None,
+            psb: false,
+            palette: Vec::new(),
+        }
+    }
+
+    pub fn compression(mut self, c: PsdCompression) -> Self {
+        self.compression = c;
+        self
+    }
+
+    pub fn build(&self) -> Vec<u8> {
+        let mut out = b"8BPS".to_vec();
+        out.extend_from_slice(&(if self.psb { 2u16 } else { 1 }).to_be_bytes());
+        out.extend_from_slice(&[0; 6]);
+        out.extend_from_slice(&(self.planes.len() as u16).to_be_bytes());
+        out.extend_from_slice(&self.height.to_be_bytes());
+        out.extend_from_slice(&self.width.to_be_bytes());
+        out.extend_from_slice(&self.depth.to_be_bytes());
+        out.extend_from_slice(&self.mode.to_be_bytes());
+        out.extend_from_slice(&(self.palette.len() as u32).to_be_bytes());
+        out.extend_from_slice(&self.palette);
+        let mut res = Vec::new();
+        if let Some(real) = self.real_merged {
+            res.extend_from_slice(b"8BIM");
+            res.extend_from_slice(&1057u16.to_be_bytes());
+            res.extend_from_slice(&[0, 0]);
+            let data = [0, 0, 0, 1, real as u8, 0];
+            res.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            res.extend_from_slice(&data);
+        }
+        out.extend_from_slice(&(res.len() as u32).to_be_bytes());
+        out.extend_from_slice(&res);
+        let len = |v: &mut Vec<u8>, n: u64| if self.psb { v.extend_from_slice(&n.to_be_bytes()) } else { v.extend_from_slice(&(n as u32).to_be_bytes()) };
+        if self.merged_alpha {
+            // Layer info with a negative count and no layer records; then an empty mask section.
+            let mut info = Vec::new();
+            len(&mut info, 2);
+            info.extend_from_slice(&(-1i16).to_be_bytes());
+            info.extend_from_slice(&0u32.to_be_bytes());
+            len(&mut out, info.len() as u64);
+            out.extend_from_slice(&info);
+        } else {
+            len(&mut out, 0);
+        }
+        let row = if self.depth == 1 { self.width.div_ceil(8) as usize } else { self.width as usize * self.depth as usize / 8 };
+        match self.compression {
+            PsdCompression::Raw => {
+                out.extend_from_slice(&0u16.to_be_bytes());
+                self.planes.iter().for_each(|p| out.extend_from_slice(p));
+            }
+            PsdCompression::Rle => {
+                out.extend_from_slice(&1u16.to_be_bytes());
+                let rows: Vec<Vec<u8>> = self.planes.iter().flat_map(|p| p.chunks(row).map(pack_bits)).collect();
+                for r in &rows {
+                    if self.psb {
+                        out.extend_from_slice(&(r.len() as u32).to_be_bytes());
+                    } else {
+                        out.extend_from_slice(&(r.len() as u16).to_be_bytes());
+                    }
+                }
+                rows.iter().for_each(|r| out.extend_from_slice(r));
+            }
+            PsdCompression::Zip | PsdCompression::ZipPredicted => {
+                let predicted = self.compression == PsdCompression::ZipPredicted;
+                out.extend_from_slice(&(if predicted { 3u16 } else { 2 }).to_be_bytes());
+                let mut raw: Vec<u8> = self.planes.concat();
+                if predicted {
+                    assert_eq!(self.depth, 8, "the builder predicts 8-bit data only");
+                    for r in raw.chunks_exact_mut(row) {
+                        for i in (1..r.len()).rev() {
+                            r[i] = r[i].wrapping_sub(r[i - 1]);
+                        }
+                    }
+                }
+                let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+                z.write_all(&raw).expect("zlib");
+                out.extend_from_slice(&z.finish().expect("zlib finish"));
+            }
+        }
+        out
+    }
+}
+
+/// PackBits with literal runs and repeats, like Photoshop writes it.
+fn pack_bits(row: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < row.len() {
+        let mut run = 1;
+        while i + run < row.len() && run < 128 && row[i + run] == row[i] {
+            run += 1;
+        }
+        if run >= 2 {
+            out.push((1 - run as i32) as i8 as u8);
+            out.push(row[i]);
+            i += run;
+        } else {
+            let start = i;
+            while i < row.len() && i - start < 128 && (i + 1 >= row.len() || row[i + 1] != row[i]) {
+                i += 1;
+            }
+            if i == start {
+                i += 1;
+            }
+            out.push((i - start - 1) as u8);
+            out.extend_from_slice(&row[start..i]);
+        }
+    }
+    out
+}

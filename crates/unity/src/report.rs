@@ -42,6 +42,8 @@ pub enum Degrade {
     MaterialUnreadable { material: String, reason: String },
     MissingTexture { material: String, guid: crate::Guid },
     TextureUnreadable { path: String, reason: String },
+    /// The texture was read with an approximation (a PSD composite in CMYK or 16 bits, ...).
+    TextureApproximated { path: String, reason: String },
     ModelUnreadable { path: String, reason: String },
     /// `m_Materials` overrides on model instances were not applied.
     MaterialOverridesIgnored { count: usize },

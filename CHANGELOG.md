@@ -4,6 +4,24 @@
 the minor version may break the API; `0.1.x` releases only fix bugs and add things.
 `RENDERER_VERSION` changes whenever rendered pixels change, independently of the crate version.
 
+## Unreleased
+
+### unipeek-unity
+
+- `Report::timings` (`Timings`): milliseconds spent indexing, planning, reading assets, parsing models,
+  binding materials, decoding textures, rendering and encoding.
+- `Degrade::TextureApproximated`: a texture was read with an approximation (CMYK or 16/32-bit PSD).
+- `testing::PsdBuilder` builds Photoshop files for tests.
+
+### unipeek
+
+- PSD and PSB textures: the composite image is read (`psd::decode`), 8-bit RGB and grayscale as
+  they are; indexed, bitmap, duotone, CMYK, 16-bit and 32-bit are converted and reported as
+  `texture_approximated`; files saved without Maximize Compatibility are `texture_unreadable`.
+- `LoadOptions::decode_textures`: off for reports. `info` and the serve `info` request now read texture
+  sizes from the file headers instead of decoding every texture.
+- `unipeek thumb --timings` prints where the time went, including GPU start-up.
+
 ## 0.1.0-alpha.2 (2026-11-24)
 
 First release on crates.io. `0.1.0-alpha.1` was only a git tag and was never published; this release
