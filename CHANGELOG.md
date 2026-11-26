@@ -4,7 +4,7 @@
 the minor version may break the API; `0.1.x` releases only fix bugs and add things.
 `RENDERER_VERSION` changes whenever rendered pixels change, independently of the crate version.
 
-## Unreleased
+## 0.1.0-alpha.3 (2026-11-26)
 
 `RENDERER_VERSION` is 2: PSD textures that used to be drawn white are now drawn, prefab material
 overrides on FBX instances are applied, and normal maps, MatCaps and emission are drawn.
