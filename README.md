@@ -13,6 +13,7 @@ Model files are never committed. Pass the paths on the command line.
 - [docs/INTEGRATION.md](docs/INTEGRATION.md): how this library plugs into Snowcase (Chinese).
 - [docs/USAGE.md](docs/USAGE.md): how a host calls the library, the `serve` protocol and the command line (Chinese).
 - [docs/ROADMAP.md](docs/ROADMAP.md): milestones M0 to M6 (Chinese).
+- [docs/MANUAL_TESTING.md](docs/MANUAL_TESTING.md): what to check by hand before a release, for Snowcase's first stage and later (Chinese).
 - [CLAUDE.md](CLAUDE.md), [Project.md](Project.md) and [.github/](.github/README.md): instructions for AI coding agents, adapted from GacUI.
 
 ## Layout
